@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>查询结果 - {{ tracking_no }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="p-4">
+  <div class="container">
+    <a href="/" class="btn btn-link">&larr; 返回查询</a>
+    <h2 class="mt-2">单号：{{ tracking_no }}</h2>
+    <p><strong>最新状态：</strong> {{ result.status }} <span class="text-muted">（更新时间：{{ result.last_update }}）</span></p>
+
+    <h5>轨迹</h5>
+    <div class="border p-3 mb-3">
+      {% if result.history %}
+        <ul class="list-unstyled mb-0">
+        {% for e in result.history %}
+          <li class="mb-2"><strong>{{ e.time or e.date or "" }}</strong> — {{ e.event or e.status or e.message or e }}</li>
+        {% endfor %}
+        </ul>
+      {% else %}
+        <div class="text-muted">暂无轨迹</div>
+      {% endif %}
+    </div>
+
+    <details>
+      <summary>查看原始返回 (raw JSON)</summary>
+      <pre>{{ result.raw | tojson(indent=2, ensure_ascii=False) }}</pre>
+    </details>
+  </div>
+</body>
+</html>
