@@ -2,20 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>物流轨迹查询</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>运单号查询</title>
 </head>
-<body class="p-4">
-  <div class="container">
-    <h1 class="mb-3">物流轨迹查询</h1>
-    <form action="/track" method="post" class="mb-3">
-      <div class="input-group">
-        <input name="hbl" class="form-control" placeholder="请输入单号 (如: SX02468)" required>
-        <button class="btn btn-primary" type="submit">查询</button>
-      </div>
-    </form>
-    <p class="text-muted">系统会实时调用货代 API（如果已配置）。如果未配置 API，会显示示例数据。</p>
-  </div>
+<body>
+  <h2>运单号查询</h2>
+  <form action="/track" method="post">
+    <textarea name="numbers" placeholder="一行一个运单号"></textarea><br>
+    <button type="submit">查询</button>
+  </form>
 </body>
 </html>
