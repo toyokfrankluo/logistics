@@ -1,4 +1,4 @@
-# app.py — 复制整个文件覆盖你当前的 app.py
+# app.py — 新版本，直接覆盖旧文件
 import os
 import json
 import requests
@@ -6,12 +6,14 @@ from flask import Flask, request, render_template_string, redirect, url_for
 
 app = Flask(__name__)
 
-# 优先使用环境变量（在 Render 上推荐设置为环境变量）
+# 优先使用环境变量（Render 推荐）
 APP_TOKEN = os.getenv("APP_TOKEN", "dfaf5c6ba49d58d8c3644671056cfb3b")
-APP_KEY = os.getenv("APP_KEY", "4a1756eb968cd85f63b8ab3047e3bebf4a1756eb968cd85f63b8ab3047e3bebf")
+APP_KEY = os.getenv("APP_KEY", "4a1756eb968cd85f63b8ab3047e3bebf")
 API_URL = os.getenv("API_URL", "http://ywsl.rtb56.com/webservice/PublicService.asmx/ServiceInterfaceUTF8")
 
-# 内联 HTML 模板（前端：输入、结果表格、错误提示）
+# =======================
+# 前端模板（支持展开/收起）
+# =======================
 HTML_TEMPLATE = """
 <!doctype html>
 <html>
@@ -28,6 +30,7 @@ HTML_TEMPLATE = """
     pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; font-size: 13px; }
     .status { font-weight: bold; color: #2b7a78; }
     .error { color: #b00020; }
+    details summary { cursor: pointer; font-weight: bold; color: #0077cc; margin-bottom: 5px; }
   </style>
 </head>
 <body>
@@ -46,18 +49,21 @@ HTML_TEMPLATE = """
   {% if results %}
     <h3>查询结果（共 {{ results|length }} 条）：</h3>
     <table>
-      <tr><th style="width:160px">运单号</th><th style="width:220px">简要状态</th><th>原始 API 返回（JSON / 文本）</th></tr>
+      <tr><th style="width:160px">运单号</th><th>最新状态 / 详细轨迹</th></tr>
       {% for num, row in results.items() %}
         <tr>
           <td>{{ num }}</td>
           <td>
-            {% if row.status %}
-              <div class="{{ 'error' if row.status.startswith('错误') or row.status.startswith('请求出错') else 'status' }}">{{ row.status }}</div>
+            {% if row.error %}
+              <div class="error">{{ row.error }}</div>
             {% else %}
-              <div class="note">无简要状态</div>
+              <div class="status">{{ row.latest }}</div>
+              <details>
+                <summary>查看详细轨迹</summary>
+                <pre>{{ row.tracks }}</pre>
+              </details>
             {% endif %}
           </td>
-          <td><pre>{{ row.raw | safe }}</pre></td>
         </tr>
       {% endfor %}
     </table>
@@ -66,12 +72,35 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def query_tracking(number: str) -> (str, str):
-    """
-    查询单个运单，返回 (status_text, raw_pretty_string)
-    status_text: 简短状态（例如 '转运中' / '获取跟踪记录成功' / '跟踪号码不能为空' / '错误: ...'）
-    raw_pretty_string: 原始 API 返回的 JSON pretty string（中文不转义）或原始文本
-    """
+# =======================
+# 格式化函数
+# =======================
+def format_tracking(data: dict):
+    """从API返回的JSON提取轨迹，返回 (最新状态, 全部轨迹字符串)"""
+    if not data or "data" not in data or not data["data"]:
+        return ("暂无状态", "没有查询到轨迹信息")
+
+    details = data["data"][0].get("details", [])
+    if not details:
+        return ("暂无状态", "暂无轨迹信息")
+
+    # 最新状态（第一条）
+    first = details[0]
+    latest = f"{first.get('track_description','')} ({first.get('track_occur_date','')})"
+
+    # 全部轨迹
+    lines = []
+    for d in details:
+        location = d.get("track_location", "")
+        desc = d.get("track_description", "")
+        time = d.get("track_occur_date", "")
+        lines.append(f"{location} — {desc}\n{time}")
+    return (latest, "\n".join(lines))
+
+# =======================
+# 调用 API
+# =======================
+def query_tracking(number: str):
     payload = {
         "appToken": APP_TOKEN,
         "appKey": APP_KEY,
@@ -81,35 +110,15 @@ def query_tracking(number: str) -> (str, str):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
         r = requests.post(API_URL, headers=headers, data=payload, timeout=15)
-        # 尝试解析 JSON
-        try:
-            data = r.json()
-            # 尝试从常见字段提取简要状态
-            status_candidates = []
-            if isinstance(data, dict):
-                # 常见字段：cnmessage, track_status_name, track_status_cnname
-                for fld in ("cnmessage", "track_status_name", "track_status_cnname", "message"):
-                    v = data.get(fld) if isinstance(data, dict) else None
-                    if v:
-                        status_candidates.append(str(v))
-                # data里可能包含 data[0].track_status_name
-                inner = data.get("data") if isinstance(data, dict) else None
-                if inner and isinstance(inner, list) and len(inner) > 0:
-                    first = inner[0]
-                    if isinstance(first, dict):
-                        for fld in ("track_status_name", "track_status_cnname"):
-                            if first.get(fld):
-                                status_candidates.append(str(first.get(fld)))
-            status_text = status_candidates[0] if status_candidates else (data.get("cnmessage") if isinstance(data, dict) else "")
-            pretty = json.dumps(data, ensure_ascii=False, indent=2)
-            return (status_text or "查询成功", pretty)
-        except Exception:
-            # 不是 JSON，返回文本
-            text = r.text
-            return ("返回非 JSON 文本", text)
+        data = r.json()
+        latest, tracks = format_tracking(data)
+        return {"latest": latest, "tracks": tracks, "error": None}
     except Exception as e:
-        return (f"请求出错: {e}", f"请求出错: {e}")
+        return {"latest": None, "tracks": None, "error": f"请求出错: {e}"}
 
+# =======================
+# 路由
+# =======================
 @app.route("/", methods=["GET"])
 def root():
     return redirect(url_for("track"))
@@ -121,23 +130,17 @@ def track():
     default_text = ""
     if request.method == "POST":
         numbers_text = request.form.get("numbers", "").strip()
-        default_text = numbers_text  # 回显
+        default_text = numbers_text
         if not numbers_text:
             message = "请先输入至少一个运单号（每行一个）"
         else:
             numbers = [n.strip() for n in numbers_text.splitlines() if n.strip()]
-            if not numbers:
-                message = "未解析到有效单号"
-            else:
-                if len(numbers) > 30:
-                    message = f"您输入 {len(numbers)} 条，本次只处理前 30 条。"
-                    numbers = numbers[:30]
-                # 逐个查询并保存结果
-                for num in numbers:
-                    status, raw = query_tracking(num)
-                    results[num] = {"status": status, "raw": raw}
+            if len(numbers) > 30:
+                message = f"您输入 {len(numbers)} 条，本次只处理前 30 条。"
+                numbers = numbers[:30]
+            for num in numbers:
+                results[num] = query_tracking(num)
     return render_template_string(HTML_TEMPLATE, results=results, message=message, default_text=default_text)
 
 if __name__ == "__main__":
-    # 本地调试用 debug=True（部署到 Render 时可关闭或让 Render 管理）
     app.run(host="0.0.0.0", port=5000, debug=True)
