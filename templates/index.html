@@ -1,14 +1,17 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <title>运单号查询</title>
-</head>
+<head><title>运单管理</title></head>
 <body>
-  <h2>运单号查询</h2>
-  <form action="/track" method="post">
-    <textarea name="numbers" placeholder="一行一个运单号"></textarea><br>
-    <button type="submit">查询</button>
+  <h1>📦 运单列表</h1>
+  <a href="{{ url_for('add_shipment') }}">➕ 手工录入</a>
+  <form action="{{ url_for('import_excel') }}" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".xlsx,.xls">
+      <button type="submit">📂 批量导入</button>
   </form>
+  <ul>
+    {% for s in shipments %}
+      <li>{{ s.tracking_number }} | {{ s.origin }} → {{ s.destination }} | 状态: {{ s.status }}</li>
+    {% endfor %}
+  </ul>
 </body>
 </html>

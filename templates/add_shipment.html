@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>{% if shipment %}编辑运单{% else %}录入运单{% endif %}</h2>
+<form method="post">
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <label>运单号</label>
+      <input name="tracking_number" class="form-control" required value="{{ shipment.tracking_number if shipment else '' }}">
+    </div>
+    <div class="col-md-4">
+      <label>客户</label>
+      <select name="customer_id" class="form-select">
+        <option value="">— 选择客户 —</option>
+        {% for c in customers %}<option value="{{ c.id }}" {% if shipment and shipment.customer_id==c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label>代理</label>
+      <select name="agent_id" class="form-select">
+        <option value="">— 选择代理 —</option>
+        {% for a in agents %}<option value="{{ a.id }}" {% if shipment and shipment.agent_id==a.id %}selected{% endif %}>{{ a.name }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-3">
+      <label>目的地</label>
+      <select name="destination" class="form-select">
+        {% for d in destinations %}<option value="{{ d }}" {% if shipment and shipment.destination==d %}selected{% endif %}>{{ d }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label>渠道</label>
+      <input name="channel" class="form-control" value="{{ shipment.channel if shipment else '' }}">
+    </div>
+    <div class="col-md-2">
+      <label>重量 (kg)</label>
+      <input name="weight" class="form-control" value="{{ shipment.weight if shipment else 0 }}">
+    </div>
+    <div class="col-md-2">
+      <label>单价</label>
+      <input name="unit_price" class="form-control" value="{{ shipment.unit_price if shipment else 0 }}">
+    </div>
+    <div class="col-md-1">
+      <label>件数</label>
+      <input name="pieces" class="form-control" value="{{ shipment.pieces if shipment else 1 }}">
+    </div>
+    <div class="col-md-2">
+      <label>费用（合计，可留空自动计算）</label>
+      <input name="fee" class="form-control" value="{{ shipment.fee if shipment else '' }}">
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-3">
+      <label>附加费</label><input name="surcharge_extra" class="form-control" value="{{ shipment.surcharge_extra if shipment else 0 }}">
+    </div>
+    <div class="col-md-3">
+      <label>操作费</label><input name="operation_fee" class="form-control" value="{{ shipment.operation_fee if shipment else 0 }}">
+    </div>
+    <div class="col-md-3">
+      <label>超值费</label><input name="high_value_fee" class="form-control" value="{{ shipment.high_value_fee if shipment else 0 }}">
+    </div>
+    <div class="col-md-3">
+      <label>产品类型</label><input name="product_type" class="form-control" value="{{ shipment.product_type if shipment else '' }}">
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <label>备注</label>
+    <input name="note" class="form-control" value="{{ shipment.note if shipment else '' }}">
+  </div>
+
+  <button class="btn btn-primary">保存</button>
+  <a class="btn btn-secondary" href="{{ url_for('shipments') }}">返回</a>
+</form>
+{% endblock %}

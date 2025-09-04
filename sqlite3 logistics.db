@@ -1,0 +1,29 @@
+-- ====================
+-- 补全 shipment 表
+-- ====================
+ALTER TABLE shipment ADD COLUMN carrier_id TEXT;
+ALTER TABLE shipment ADD COLUMN agent_id INTEGER;
+ALTER TABLE shipment ADD COLUMN channel TEXT;
+ALTER TABLE shipment ADD COLUMN weight REAL DEFAULT 0.0;
+ALTER TABLE shipment ADD COLUMN unit_price REAL DEFAULT 0.0;
+ALTER TABLE shipment ADD COLUMN fee REAL DEFAULT 0.0;
+ALTER TABLE shipment ADD COLUMN note TEXT;
+ALTER TABLE shipment ADD COLUMN updated_at TEXT;
+
+-- ====================
+-- 补全 customer 表
+-- ====================
+ALTER TABLE customer ADD COLUMN bank_info TEXT;
+
+-- ====================
+-- 补全 carrier_agent 表
+-- ====================
+ALTER TABLE carrier_agent ADD COLUMN app_key TEXT;
+ALTER TABLE carrier_agent ADD COLUMN app_token TEXT;
+ALTER TABLE carrier_agent ADD COLUMN customer_code TEXT;
+
+-- ====================
+-- 补全 order_info 表
+-- ====================
+ALTER TABLE order_info ADD COLUMN order_no TEXT;
+ALTER TABLE order_info ADD COLUMN shipment_id INTEGER;

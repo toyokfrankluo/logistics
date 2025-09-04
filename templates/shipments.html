@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>运单管理</h1>
+<p><a class="btn btn-primary" href="{{ url_for('add_shipment') }}">新增运单</a></p>
+
+<table class="table">
+  <thead>
+    <tr><th>运单号</th><th>客户</th><th>代理</th><th>目的地</th><th>渠道</th><th>重量</th><th>单价</th><th>附加</th><th>操作费</th><th>超值费</th><th>费用</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for s in shipments %}
+    <tr>
+      <td>{{ s.tracking_number }}</td>
+      <td>{{ s.customer.name if s.customer else "" }}</td>
+      <td>{{ s.agent.name if s.agent else "" }}</td>
+      <td>{{ s.destination }}</td>
+      <td>{{ s.channel }}</td>
+      <td>{{ s.weight }}</td>
+      <td>{{ s.unit_price }}</td>
+      <td>{{ s.surcharge_extra }}</td>
+      <td>{{ s.operation_fee }}</td>
+      <td>{{ s.high_value_fee }}</td>
+      <td>{{ s.fee }}</td>
+      <td>{{ s.status }}</td>
+      <td>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_shipment', id=s.id) }}">编辑</a>
+        <form style="display:inline" method="post" action="{{ url_for('delete_shipment', id=s.id) }}">
+          <button class="btn btn-sm btn-danger">删除</button>
+        </form>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('manual_track_add', shipment_id=s.id) }}">手动轨迹</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

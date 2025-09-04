@@ -1,5 +1,10 @@
 Flask==2.3.2
+Flask-SQLAlchemy==3.0.5
+Flask-Admin==1.6.1
+Flask-Login==0.6.3
 requests==2.31.0
-beautifulsoup4
-python-dotenv
+python-dotenv==1.1.1
+openpyxl==3.1.5
+pandas==2.1.2
 gunicorn==21.2.0
+beautifulsoup4==4.13.5
