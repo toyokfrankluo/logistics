@@ -1,36 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>运单管理</h1>
-<p><a class="btn btn-primary" href="{{ url_for('add_shipment') }}">新增运单</a></p>
+<div class="container mt-4">
+    <h2>运单管理</h2>
+    <a href="{{ url_for('views.add_shipment') }}" class="btn btn-primary mb-3">新增运单</a>
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>运单号</th>
+                <th>客户</th>
+                <th>代理</th>
+                <th>渠道</th>
+                <th>重量</th>
+                <th>费用</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for shipment in shipments %}
+            <tr>
+                <td>{{ shipment.id }}</td>
+                <td>{{ shipment.tracking_number }}</td>
+                <td>{{ shipment.customer.name if shipment.customer else '' }}</td>
+                <td>{{ shipment.agent.name if shipment.agent else '' }}</td>
+                <td>{{ shipment.channel }}</td>
+                <td>{{ shipment.weight }}</td>
+                <td>{{ "%.2f"|format(shipment.fee) if shipment.fee else "0.00" }}</td>
+                <td>{{ shipment.status }}</td>
+                <td>
+                    <!-- 编辑 -->
+                    <a href="{{ url_for('views.edit_shipment', shipment_id=shipment.id) }}" 
+                       class="btn btn-sm btn-warning">编辑</a>
 
-<table class="table">
-  <thead>
-    <tr><th>运单号</th><th>客户</th><th>代理</th><th>目的地</th><th>渠道</th><th>重量</th><th>单价</th><th>附加</th><th>操作费</th><th>超值费</th><th>费用</th><th>状态</th><th>操作</th></tr>
-  </thead>
-  <tbody>
-    {% for s in shipments %}
-    <tr>
-      <td>{{ s.tracking_number }}</td>
-      <td>{{ s.customer.name if s.customer else "" }}</td>
-      <td>{{ s.agent.name if s.agent else "" }}</td>
-      <td>{{ s.destination }}</td>
-      <td>{{ s.channel }}</td>
-      <td>{{ s.weight }}</td>
-      <td>{{ s.unit_price }}</td>
-      <td>{{ s.surcharge_extra }}</td>
-      <td>{{ s.operation_fee }}</td>
-      <td>{{ s.high_value_fee }}</td>
-      <td>{{ s.fee }}</td>
-      <td>{{ s.status }}</td>
-      <td>
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_shipment', id=s.id) }}">编辑</a>
-        <form style="display:inline" method="post" action="{{ url_for('delete_shipment', id=s.id) }}">
-          <button class="btn btn-sm btn-danger">删除</button>
-        </form>
-        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('manual_track_add', shipment_id=s.id) }}">手动轨迹</a>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+                    <!-- 删除 -->
+                    <form method="POST" action="{{ url_for('views.delete_shipment', shipment_id=shipment.id) }}" 
+                          style="display:inline;">
+                        <button type="submit" class="btn btn-sm btn-danger" 
+                                onclick="return confirm('确定删除该运单吗？')">删除</button>
+                    </form>
+
+                    <!-- 手工轨迹 -->
+                    <a href="{{ url_for('views.manual_tracks', shipment_id=shipment.id) }}" 
+                       class="btn btn-sm btn-info">手工轨迹</a>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="9" class="text-center">暂无运单</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
 {% endblock %}

@@ -11,19 +11,23 @@
     <aside class="sidebar">
       <h2>菜单</h2>
       <ul>
-        <li><a href="{{ url_for('add_shipment') }}">录入运单</a></li>
-        <li><a href="{{ url_for('customers') }}">客户管理</a></li>
-        <li><a href="{{ url_for('agents') }}">代理管理</a></li>
-        <li><a href="{{ url_for('finance') }}">财务模块</a></li>
-        <li><a href="{{ url_for('track') }}">轨迹查询</a></li>
-        <li><a href="{{ url_for('logout') }}">登出</a></li>
+        <li><a href="{{ url_for('views.add_shipment') }}">录入运单</a></li>
+        <li><a href="{{ url_for('views.shipments') }}">运单管理</a></li>
+        <li><a href="{{ url_for('views.customers') }}">客户管理</a></li>
+        <li><a href="{{ url_for('views.agents') }}">代理管理</a></li>
+        <li><a href="{{ url_for('views.finance') }}">财务模块</a></li>
+        <li><a href="{{ url_for('views.bank_accounts') }}">收款账户管理</a></li>
+        <li><a href="{{ url_for('views.track') }}">轨迹查询</a></li>
+        <li><a href="{{ url_for('views.logout') }}">登出</a></li>
       </ul>
     </aside>
     <main class="main">
-      {% with messages = get_flashed_messages() %}
+      {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="flash">
-          {% for m in messages %}<div>{{ m }}</div>{% endfor %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
         </div>
         {% endif %}
       {% endwith %}

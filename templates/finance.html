@@ -2,7 +2,7 @@
 {% block content %}
 <h1>财务模块</h1>
 
-<form method="post" action="{{ url_for('finance') }}" class="row g-3 mb-3">
+<form method="post" action="{{ url_for('views.finance') }}" class="row g-3 mb-3">
   <div class="col-md-3">
     <label>选择客户</label>
     <select name="customer_id" class="form-select">
@@ -13,12 +13,12 @@
     </select>
   </div>
   <div class="col-md-3">
-    <label>开始日期 (YYYY-MM-DD)</label>
-    <input name="date_from" value="{{ date_from or '' }}" class="form-control">
+    <label>开始日期</label>
+    <input type="date" name="date_from" value="{{ date_from or '' }}" class="form-control">
   </div>
   <div class="col-md-3">
-    <label>结束日期 (YYYY-MM-DD)</label>
-    <input name="date_to" value="{{ date_to or '' }}" class="form-control">
+    <label>结束日期</label>
+    <input type="date" name="date_to" value="{{ date_to or '' }}" class="form-control">
   </div>
   <div class="col-md-3 align-self-end">
     <button type="submit" class="btn btn-primary">筛选</button>
