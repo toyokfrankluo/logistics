@@ -19,6 +19,7 @@ from flask import (
     Flask, request, render_template, render_template_string,
     redirect, url_for, flash, send_file, abort
 )
+from flask_cors import CORS
 
 try:
     import pandas as pd
@@ -47,6 +48,8 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 app.secret_key = os.getenv("FLASK_SECRET", "change-this-secret-for-dev")
+
+CORS(app)   # 🔹允许跨域
 
 from views import views
 app.register_blueprint(views)
