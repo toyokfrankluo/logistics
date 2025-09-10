@@ -896,6 +896,20 @@ def bank_accounts():
 # ------------------------------
 # 手工轨迹：为不支持抓取的代理/单票添加
 # ------------------------------
+from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash
+from flask_login import login_required, current_user
+from datetime import datetime
+import json
+
+# 假设这些是你项目里已有的
+from models import db, Shipment, ManualTrack, CarrierAgent, Customer
+from utils import call_gettrack, format_tracks_from_data, render_template_safe
+
+app = Flask(__name__)
+
+# ------------------------------
+# 手工轨迹维护
+# ------------------------------
 @app.route("/shipments/<int:sid>/tracks", methods=["GET", "POST"])
 @login_required
 def manual_tracks(sid):
@@ -935,7 +949,7 @@ def manual_tracks(sid):
     """, s=s)
 
 # ------------------------------
-# 轨迹查询：支持按代理/客户批量，不填运单号也可（内部使用）
+# 内部轨迹查询（支持代理/客户批量，不填运单号也可）
 # ------------------------------
 @app.route("/track", methods=["GET", "POST"])
 @login_required
@@ -955,7 +969,7 @@ def track():
         if default_text:
             numbers = [ln.strip() for ln in default_text.splitlines() if ln.strip()]
 
-        # 新增：如果未输入单号，可以按代理/客户自动取（最多 30）
+        # 未输入单号时，按代理/客户取最近30条
         if not numbers:
             q = Shipment.query
             if agent_id:
@@ -972,7 +986,6 @@ def track():
 
         for n in numbers:
             s = Shipment.query.filter_by(tracking_number=n).first()
-            data = None
             if s and s.agent_id:
                 data = call_gettrack(None, n, agent_id=s.agent_id)
             elif s and s.carrier_id:
@@ -989,15 +1002,16 @@ def track():
             else:
                 results[n] = {"error": None, "tracks": format_tracks_from_data(data), "raw": data}
 
-    # 你当前模板没有客户下拉，这里传过去备用（不影响渲染）
     return render_template_safe("track.html",
                                 carriers=carriers_env, agents=agents,
                                 customers=Customer.query.order_by(Customer.name).all(),
                                 results=results, message=message, default_text=default_text)
 
+# ------------------------------
 # 公共查询页（仅按单号，不暴露批量/代理/客户）
+# ------------------------------
 @app.route("/public/track", methods=["GET", "POST"])
-def public_track():
+def public_track_page():
     results = {}
     default_text = ""
     message = ""
@@ -1012,7 +1026,6 @@ def public_track():
                 lines = lines[:30]
             for n in lines:
                 s = Shipment.query.filter_by(tracking_number=n).first()
-                data = None
                 if s and s.agent_id:
                     data = call_gettrack(None, n, agent_id=s.agent_id)
                 elif s and s.carrier_id:
@@ -1024,7 +1037,6 @@ def public_track():
                 else:
                     results[n] = {"error": None, "tracks": format_tracks_from_data(data), "raw": data}
 
-    # 简单公共页面
     return render_template_string("""
     <h2>物流轨迹查询</h2>
     <form method="post">
@@ -1045,7 +1057,7 @@ def public_track():
     """, results=results, message=message, default_text=default_text)
 
 # ------------------------------
-# API
+# API 接口（保持原有）
 # ------------------------------
 @app.route("/api/track/<carrier_id>/<tracking_number>")
 def api_track_one(carrier_id, tracking_number):
@@ -1057,6 +1069,33 @@ def api_track_by_agent(agent_id, tracking_number):
     data = call_gettrack(None, tracking_number, agent_id=agent_id)
     return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
 
+# ------------------------------
+# 新增 JSON API（给前端 fetch 调用）
+# ------------------------------
+@app.route("/public_track", methods=["POST"])
+def public_track_json():
+    try:
+        data = request.get_json() or {}
+        order_id = data.get("order_id", "").strip()
+
+        if not order_id:
+            return jsonify({"error": "缺少 order_id 参数"}), 400
+
+        s = Shipment.query.filter_by(tracking_number=order_id).first()
+        if s and s.agent_id:
+            result_data = call_gettrack(None, order_id, agent_id=s.agent_id)
+        elif s and s.carrier_id:
+            result_data = call_gettrack(s.carrier_id, order_id, agent_id=None)
+        else:
+            result_data = call_gettrack(None, order_id, agent_id=None)
+
+        if isinstance(result_data, dict) and result_data.get("error"):
+            return jsonify({"order_id": order_id, "error": result_data.get("error"), "tracks": []})
+        else:
+            return jsonify({"order_id": order_id, "error": None, "tracks": format_tracks_from_data(result_data)})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 # ------------------------------
 # 账单手工导出（保留）
 # ------------------------------
