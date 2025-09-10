@@ -896,19 +896,15 @@ def bank_accounts():
 # ------------------------------
 # 手工轨迹：为不支持抓取的代理/单票添加
 # ------------------------------
-from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash
-from flask_login import login_required, current_user
 from datetime import datetime
-import json
+from flask import request, redirect, url_for, flash, render_template_string, jsonify
+from flask_login import login_required, current_user
 
-# 假设这些是你项目里已有的
-from models import db, Shipment, ManualTrack, CarrierAgent, Customer
 from utils import call_gettrack, format_tracks_from_data, render_template_safe
-
-app = Flask(__name__)
+from models import db, Shipment, ManualTrack, CarrierAgent, Customer
 
 # ------------------------------
-# 手工轨迹维护
+# 手工轨迹
 # ------------------------------
 @app.route("/shipments/<int:sid>/tracks", methods=["GET", "POST"])
 @login_required
@@ -949,7 +945,7 @@ def manual_tracks(sid):
     """, s=s)
 
 # ------------------------------
-# 内部轨迹查询（支持代理/客户批量，不填运单号也可）
+# 内部轨迹查询（支持代理/客户）
 # ------------------------------
 @app.route("/track", methods=["GET", "POST"])
 @login_required
@@ -969,7 +965,7 @@ def track():
         if default_text:
             numbers = [ln.strip() for ln in default_text.splitlines() if ln.strip()]
 
-        # 未输入单号时，按代理/客户取最近30条
+        # 如果未输入单号，可以按代理/客户自动取（最多 30）
         if not numbers:
             q = Shipment.query
             if agent_id:
@@ -986,6 +982,7 @@ def track():
 
         for n in numbers:
             s = Shipment.query.filter_by(tracking_number=n).first()
+            data = None
             if s and s.agent_id:
                 data = call_gettrack(None, n, agent_id=s.agent_id)
             elif s and s.carrier_id:
@@ -1008,7 +1005,7 @@ def track():
                                 results=results, message=message, default_text=default_text)
 
 # ------------------------------
-# 公共查询页（仅按单号，不暴露批量/代理/客户）
+# 公共查询页面（Web表单）
 # ------------------------------
 @app.route("/public/track", methods=["GET", "POST"])
 def public_track_page():
@@ -1026,6 +1023,7 @@ def public_track_page():
                 lines = lines[:30]
             for n in lines:
                 s = Shipment.query.filter_by(tracking_number=n).first()
+                data = None
                 if s and s.agent_id:
                     data = call_gettrack(None, n, agent_id=s.agent_id)
                 elif s and s.carrier_id:
@@ -1057,7 +1055,7 @@ def public_track_page():
     """, results=results, message=message, default_text=default_text)
 
 # ------------------------------
-# API 接口（保持原有）
+# API
 # ------------------------------
 @app.route("/api/track/<carrier_id>/<tracking_number>")
 def api_track_one(carrier_id, tracking_number):
@@ -1070,7 +1068,7 @@ def api_track_by_agent(agent_id, tracking_number):
     return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
 
 # ------------------------------
-# 新增 JSON API（给前端 fetch 调用）
+# 新增 JSON API（前端 fetch 调用用这个）
 # ------------------------------
 @app.route("/public_track", methods=["POST"])
 def public_track_json():
