@@ -1066,6 +1066,12 @@ def api_track_one(carrier_id, tracking_number):
 def api_track_by_agent(agent_id, tracking_number):
     data = call_gettrack(None, tracking_number, agent_id=agent_id)
     return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+# ------------------------------
+# 新增路由，渲染前端页面
+# ------------------------------
+@app.route("/frontend")
+def frontend_page():
+    return render_template("public_frontend.html")
 
 # ------------------------------
 # 新增 JSON API（前端 fetch 调用用这个）
