@@ -1,10 +1,12 @@
-# utils.py
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 import math
 
+# =========================
+# Excel 导出
+# =========================
 def export_invoice(company_info, customer_name, orders, bank_accounts,
                    filename="账单.xlsx", date_from=None, date_to=None):
     """
@@ -178,3 +180,42 @@ def export_invoice(company_info, customer_name, orders, bank_accounts,
 
     wb.save(filename)
     return filename
+
+
+# =========================
+# 轨迹查询相关
+# =========================
+from flask import render_template
+
+def call_gettrack(carrier_id, tracking_number, agent_id=None):
+    """
+    轨迹查询统一接口（占位实现）。
+    这里可以接第三方物流 API，也可以返回本地假数据。
+    """
+    # 你以后可以改成调用真实 API
+    return {
+        "tracking_number": tracking_number,
+        "tracks": [
+            {"time": "2025-09-10 10:00", "status": "包裹已揽收"},
+            {"time": "2025-09-11 15:00", "status": "运输中"},
+            {"time": "2025-09-12 09:30", "status": "派送中"},
+        ]
+    }
+
+def format_tracks_from_data(data):
+    """
+    把 call_gettrack 返回的结果转成前端友好的格式。
+    """
+    if not data or "tracks" not in data:
+        return []
+    tracks = data["tracks"]
+    return "\n".join([f"{t['time']} - {t['status']}" for t in tracks])
+
+def render_template_safe(template_name, **context):
+    """
+    渲染模板的安全封装，避免出错时崩溃。
+    """
+    try:
+        return render_template(template_name, **context)
+    except Exception as e:
+        return f"模板渲染失败: {e}"
