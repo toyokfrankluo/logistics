@@ -27,11 +27,14 @@ def init_database():
                     print("ℹ️ 表为空，但结构完整")
             except Exception as e:
                 print(f"⚠️ 表结构可能不完整: {e}")
-                print("🔄 重新创建表结构...")
-                # 删除并重新创建所有表
-                db.drop_all()
-                db.create_all()
-                print("✅ 表结构重新创建成功")
+                print("ℹ️ 表结构不完整，建议手动修复")
+                
+                # 安全的方式：只创建缺失的表，不删除现有数据
+                try:
+                    db.create_all()  # 这会只创建不存在的表，不会影响现有数据
+                    print("✅ 已尝试创建缺失表")
+                except Exception as create_error:
+                    print(f"❌ 创建缺失表失败: {create_error}")
             
             # 创建默认管理员用户
             print("👤 检查默认用户...")
