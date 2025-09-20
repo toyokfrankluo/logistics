@@ -203,7 +203,7 @@ def add_shipment():
 
         shipment = Shipment(
             tracking_number=tracking_number,
-            shipment_id=request.form.get("shipment_id"),  # 使用 shipment_id 替换 agent_tracking_number
+            shipment_id=request.form.get("shipment_id"),
             third_party_tracking_number=request.form.get("third_party_tracking_number"),
             customer_id=request.form.get("customer_id") or None,
             agent_id=request.form.get("agent_id") or None,
@@ -225,6 +225,52 @@ def add_shipment():
 
         db.session.add(shipment)
         db.session.commit()
+        
+        # =============== 新增代码：写入Supabase ===============
+        try:
+            import requests
+            import json
+            
+            # 获取客户名称
+            customer_name = "未知客户"
+            if shipment.customer_id:
+                customer = Customer.query.get(shipment.customer_id)
+                if customer:
+                    customer_name = customer.name
+            
+            # Supabase配置 - 需要您修改这里！！！
+            supabase_url = "https://qxfzltryagnyiderbljf.supabase.co"  # 修改为您的URL
+            supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4"           # 修改为您的密钥
+            
+            # 写入shipment_tracking表
+            data_to_insert = {
+                "tracking_number": shipment.tracking_number,
+                "customer_name": customer_name,
+                "current_location": shipment.origin or "仓库",
+                "status": "pending",
+                "notes": f"目的地: {shipment.destination} | 渠道: {shipment.channel}"
+            }
+            
+            response = requests.post(
+                f"{supabase_url}/rest/v1/shipment_tracking",
+                headers={
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json",
+                    "apikey": supabase_key,
+                    "Prefer": "return=minimal"
+                },
+                data=json.dumps(data_to_insert)
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                print(f"成功写入Supabase: {shipment.tracking_number}")
+            else:
+                print(f"写入Supabase失败: {response.status_code}, {response.text}")
+                
+        except Exception as e:
+            print(f"写入Supabase异常: {str(e)}")
+        # =============== 新增代码结束 ===============
+        
         flash("运单已保存", "success")
         return redirect(url_for("views.shipments"))
 
@@ -311,9 +357,6 @@ def bank_accounts():
     return render_template("bank_accounts.html", accounts=accounts)
 
 
-# -------------------------------
-# 手工轨迹
-# -------------------------------
 @views.route("/shipments/<int:shipment_id>/tracks", methods=["GET", "POST"])
 @login_required
 def manual_tracks(shipment_id):
@@ -328,6 +371,44 @@ def manual_tracks(shipment_id):
         )
         db.session.add(track)
         db.session.commit()
+        
+        # =============== 新增代码：同步手工轨迹到Supabase ===============
+        try:
+            import requests
+            import json
+            
+            # 更新Supabase中的轨迹信息
+            supabase_url = "https://您的项目ID.supabase.co"
+            supabase_key = "您的anon-public-key"
+            
+            # 更新当前位置和状态
+            update_data = {
+                "current_location": request.form.get("location"),
+                "status": "in_transit",  # 手工添加轨迹通常表示运输中
+                "notes": f"手工更新: {request.form.get('description')}",
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            response = requests.patch(
+                f"{supabase_url}/rest/v1/shipment_tracking?tracking_number=eq.{shipment.tracking_number}",
+                headers={
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json",
+                    "apikey": supabase_key,
+                    "Prefer": "return=minimal"
+                },
+                data=json.dumps(update_data)
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                print(f"手工轨迹同步成功: {shipment.tracking_number}")
+            else:
+                print(f"手工轨迹同步失败: {response.status_code}")
+                
+        except Exception as e:
+            print(f"手工轨迹同步异常: {str(e)}")
+        # =============== 新增代码结束 ===============
+        
         flash("轨迹已添加", "success")
         return redirect(url_for("views.manual_tracks", shipment_id=shipment.id))
 
