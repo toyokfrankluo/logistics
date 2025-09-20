@@ -112,7 +112,7 @@ def get_sqlite_path_from_uri(uri: str):
 # 用户模型（仅后端使用）
 # ------------------------------
 class User(UserMixin, db.Model):
-    __tablename__ = "user"
+    __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
