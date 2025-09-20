@@ -290,6 +290,60 @@ def add_shipment():
             flash("运单已保存，但同步到查询系统时出现异常", "warning")
         # =============== 同步代码结束 ===============
         
+        # =============== 新增：轨迹同步代码 ===============
+        try:
+            # 只有有代理的运单才获取轨迹
+            if shipment.agent_id:
+                agent = CarrierAgent.query.get(shipment.agent_id)
+                if agent and agent.supports_api:
+                    print(f"🔄 尝试获取轨迹信息: {shipment.tracking_number}")
+                    
+                    # 调用您的轨迹API获取函数
+                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    
+                    if tracks and not error:
+                        print(f"✅ 获取到 {len(tracks)} 条轨迹信息")
+                        
+                        # 同步每条轨迹到Supabase
+                        for track in tracks:
+                            # 处理时间格式
+                            event_time = track.get('time')
+                            if not event_time:
+                                event_time = datetime.utcnow().isoformat()
+                            
+                            track_data = {
+                                "tracking_number": shipment.tracking_number,
+                                "event_time": event_time,
+                                "location": track.get('location', ''),
+                                "description": track.get('description', track.get('info', track.get('status', '')))
+                            }
+                            
+                            response = requests.post(
+                                f"{supabase_url}/rest/v1/shipment_tracking_details",
+                                headers={
+                                    "Authorization": f"Bearer {supabase_key}",
+                                    "Content-Type": "application/json",
+                                    "apikey": supabase_key,
+                                    "Prefer": "return=minimal"
+                                },
+                                data=json.dumps(track_data),
+                                timeout=10
+                            )
+                            
+                            if response.status_code in [200, 201, 204]:
+                                print(f"✅ 同步轨迹成功: {track_data['description'][:50]}...")
+                            else:
+                                print(f"❌ 轨迹同步失败: {response.status_code}")
+                                
+                    else:
+                        print(f"⚠️ 无法获取轨迹: {error}")
+                        
+        except Exception as e:
+            print(f"🔥 轨迹同步异常: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        # =============== 轨迹同步结束 ===============
+        
         return redirect(url_for("views.shipments"))
 
     customers = Customer.query.all()
@@ -694,11 +748,13 @@ def logout():
     flash("您已登出", "success")
     return redirect(url_for("login"))
 
-# 添加到文件末尾，在其他路由之后
+# -------------------------------
+# 手动同步路由
+# -------------------------------
 @views.route("/admin/sync-to-supabase")
 @login_required
 def sync_to_supabase():
-    """手动同步所有运单到Supabase"""
+    """手动同步所有运单基本信息到Supabase"""
     try:
         import requests
         import json
@@ -758,9 +814,93 @@ def sync_to_supabase():
                 error_count += 1
                 print(f"🔥 同步异常: {shipment.tracking_number} - {str(e)}")
         
-        flash(f"同步完成！成功: {success_count}, 失败: {error_count}", "success")
+        flash(f"基本运单同步完成！成功: {success_count}, 失败: {error_count}", "success")
         
     except Exception as e:
         flash(f"同步过程出错: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
+
+
+# =============== 新增：轨迹同步路由 ===============
+@views.route("/admin/sync-tracking-details")
+@login_required
+def sync_tracking_details():
+    """手动同步所有运单的轨迹信息"""
+    try:
+        import requests
+        import json
+        import os
+        from datetime import datetime
+        
+        # 获取Supabase配置
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_KEY')
+        
+        if not supabase_url or not supabase_key:
+            flash("Supabase配置缺失", "danger")
+            return redirect(url_for("views.shipments"))
+        
+        # 获取所有有代理的运单
+        shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).all()
+        success_count = 0
+        error_count = 0
+        
+        print(f"🔄 开始同步 {len(shipments)} 个运单的轨迹信息")
+        
+        for shipment in shipments:
+            try:
+                agent = CarrierAgent.query.get(shipment.agent_id)
+                if agent and agent.supports_api:
+                    print(f"📦 处理运单: {shipment.tracking_number}")
+                    
+                    # 调用轨迹API
+                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    
+                    if tracks and not error:
+                        for track in tracks:
+                            # 处理时间格式
+                            event_time = track.get('time')
+                            if not event_time:
+                                event_time = datetime.utcnow().isoformat()
+                            
+                            track_data = {
+                                "tracking_number": shipment.tracking_number,
+                                "event_time": event_time,
+                                "location": track.get('location', ''),
+                                "description": track.get('description', track.get('info', track.get('status', '')))
+                            }
+                            
+                            response = requests.post(
+                                f"{supabase_url}/rest/v1/shipment_tracking_details",
+                                headers={
+                                    "Authorization": f"Bearer {supabase_key}",
+                                    "Content-Type": "application/json",
+                                    "apikey": supabase_key,
+                                    "Prefer": "return=minimal"
+                                },
+                                data=json.dumps(track_data),
+                                timeout=10
+                            )
+                            
+                            if response.status_code in [200, 201, 204]:
+                                success_count += 1
+                            else:
+                                error_count += 1
+                    
+                    else:
+                        print(f"⚠️ 无法获取 {shipment.tracking_number} 的轨迹: {error}")
+                        error_count += 1
+                        
+            except Exception as e:
+                error_count += 1
+                print(f"🔥 处理 {shipment.tracking_number} 时出错: {str(e)}")
+        
+        flash(f"轨迹同步完成！成功: {success_count}, 失败: {error_count}", "success")
+        
+    except Exception as e:
+        flash(f"轨迹同步过程出错: {str(e)}", "danger")
+        import traceback
+        traceback.print_exc()
     
     return redirect(url_for("views.shipments"))
