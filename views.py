@@ -226,10 +226,15 @@ def add_shipment():
         db.session.add(shipment)
         db.session.commit()
         
-        # =============== 新增代码：写入Supabase ===============
+        # =============== 优化后的Supabase同步代码 ===============
         try:
             import requests
             import json
+            import os
+            
+            # 从环境变量获取Supabase配置（更安全）
+            supabase_url = os.getenv('SUPABASE_URL', 'https://qxfzltryagnyiderbljf.supabase.co')
+            supabase_key = os.getenv('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4')
             
             # 获取客户名称
             customer_name = "未知客户"
@@ -238,18 +243,17 @@ def add_shipment():
                 if customer:
                     customer_name = customer.name
             
-            # Supabase配置 - 需要您修改这里！！！
-            supabase_url = "https://qxfzltryagnyiderbljf.supabase.co"  # 修改为您的URL
-            supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4"           # 修改为您的密钥
-            
-            # 写入shipment_tracking表
+            # 准备同步数据
             data_to_insert = {
                 "tracking_number": shipment.tracking_number,
                 "customer_name": customer_name,
                 "current_location": shipment.origin or "仓库",
                 "status": "pending",
-                "notes": f"目的地: {shipment.destination} | 渠道: {shipment.channel}"
+                "notes": f"目的地: {shipment.destination} | 渠道: {shipment.channel} | 重量: {shipment.weight}kg"
             }
+            
+            # 打印调试信息
+            print(f"🔄 尝试同步到Supabase: {tracking_number}")
             
             response = requests.post(
                 f"{supabase_url}/rest/v1/shipment_tracking",
@@ -259,19 +263,33 @@ def add_shipment():
                     "apikey": supabase_key,
                     "Prefer": "return=minimal"
                 },
-                data=json.dumps(data_to_insert)
+                data=json.dumps(data_to_insert),
+                timeout=10  # 添加超时
             )
             
+            # 详细的响应处理
             if response.status_code in [200, 201, 204]:
-                print(f"成功写入Supabase: {shipment.tracking_number}")
+                print(f"✅ 成功同步到Supabase: {tracking_number}")
+                flash("运单已保存并同步到查询系统", "success")
             else:
-                print(f"写入Supabase失败: {response.status_code}, {response.text}")
+                error_msg = f"❌ 同步失败: {response.status_code} - {response.text}"
+                print(error_msg)
+                flash("运单已保存，但同步到查询系统失败", "warning")
                 
+        except requests.exceptions.Timeout:
+            print("⏰ Supabase请求超时")
+            flash("运单已保存，但同步到查询系统超时", "warning")
+        except requests.exceptions.ConnectionError:
+            print("🔌 网络连接错误")
+            flash("运单已保存，但无法连接到查询系统", "warning")
         except Exception as e:
-            print(f"写入Supabase异常: {str(e)}")
-        # =============== 新增代码结束 ===============
+            error_msg = f"🔥 同步异常: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            flash("运单已保存，但同步到查询系统时出现异常", "warning")
+        # =============== 同步代码结束 ===============
         
-        flash("运单已保存", "success")
         return redirect(url_for("views.shipments"))
 
     customers = Customer.query.all()
@@ -675,3 +693,74 @@ def logout():
     logout_user()
     flash("您已登出", "success")
     return redirect(url_for("login"))
+
+# 添加到文件末尾，在其他路由之后
+@views.route("/admin/sync-to-supabase")
+@login_required
+def sync_to_supabase():
+    """手动同步所有运单到Supabase"""
+    try:
+        import requests
+        import json
+        import os
+        
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_KEY')
+        
+        if not supabase_url or not supabase_key:
+            flash("Supabase配置缺失", "danger")
+            return redirect(url_for("views.shipments"))
+        
+        # 获取所有运单
+        shipments = Shipment.query.all()
+        success_count = 0
+        error_count = 0
+        
+        for shipment in shipments:
+            try:
+                # 获取客户名称
+                customer_name = "未知客户"
+                if shipment.customer_id:
+                    customer = Customer.query.get(shipment.customer_id)
+                    if customer:
+                        customer_name = customer.name
+                
+                # 准备数据
+                data_to_insert = {
+                    "tracking_number": shipment.tracking_number,
+                    "customer_name": customer_name,
+                    "current_location": shipment.origin or "仓库",
+                    "status": "pending",
+                    "notes": f"目的地: {shipment.destination} | 渠道: {shipment.channel}"
+                }
+                
+                # 写入Supabase
+                response = requests.post(
+                    f"{supabase_url}/rest/v1/shipment_tracking",
+                    headers={
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                        "apikey": supabase_key,
+                        "Prefer": "return=minimal"
+                    },
+                    data=json.dumps(data_to_insert),
+                    timeout=10
+                )
+                
+                if response.status_code in [200, 201, 204]:
+                    success_count += 1
+                    print(f"✅ 同步成功: {shipment.tracking_number}")
+                else:
+                    error_count += 1
+                    print(f"❌ 同步失败: {shipment.tracking_number} - {response.text}")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"🔥 同步异常: {shipment.tracking_number} - {str(e)}")
+        
+        flash(f"同步完成！成功: {success_count}, 失败: {error_count}", "success")
+        
+    except Exception as e:
+        flash(f"同步过程出错: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
