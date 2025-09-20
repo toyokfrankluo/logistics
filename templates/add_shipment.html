@@ -8,6 +8,17 @@
       <input name="tracking_number" class="form-control" required value="{{ shipment.tracking_number if shipment else '' }}">
     </div>
     <div class="col-md-4">
+      <label>NextSLS Shipment ID</label>
+      <input name="shipment_id" class="form-control" value="{{ shipment.shipment_id if shipment else '' }}">
+    </div>
+    <div class="col-md-4">
+      <label>17Track单号</label>
+      <input name="third_party_tracking_number" class="form-control" value="{{ shipment.third_party_tracking_number if shipment else '' }}">
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
       <label>客户</label>
       <select name="customer_id" class="form-select">
         <option value="">— 选择客户 —</option>
@@ -25,10 +36,7 @@
         {% endfor %}
       </select>
     </div>
-  </div>
-
-  <div class="row g-3 mb-3">
-    <div class="col-md-3">
+    <div class="col-md-4">
       <label>目的地</label>
       <select name="destination" class="form-select">
         {% for d in destinations %}
@@ -36,6 +44,9 @@
         {% endfor %}
       </select>
     </div>
+  </div>
+
+  <div class="row g-3 mb-3">
     <div class="col-md-2">
       <label>渠道</label>
       <select name="channel" class="form-select">

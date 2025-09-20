@@ -1,4 +1,3 @@
-# models.py
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 
@@ -60,7 +59,9 @@ class Shipment(db.Model, TimestampMixin):
     __tablename__ = "shipment"
 
     id = db.Column(db.Integer, primary_key=True)
-    tracking_number = db.Column(db.String(50), unique=True, nullable=False)
+    tracking_number = db.Column(db.String(50), nullable=False)  # 客户单号
+    shipment_id = db.Column(db.String(50))  # NextSLS 系统单号，替换 agent_tracking_number
+    third_party_tracking_number = db.Column(db.String(50))  # 第三方快递单号（用于17track）
 
     # 关联
     customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"))

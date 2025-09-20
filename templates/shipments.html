@@ -8,6 +8,8 @@
             <tr>
                 <th>ID</th>
                 <th>运单号</th>
+                <th>代理单号</th>
+                <th>17Track单号</th>
                 <th>客户</th>
                 <th>代理</th>
                 <th>渠道</th>
@@ -22,6 +24,8 @@
             <tr>
                 <td>{{ shipment.id }}</td>
                 <td>{{ shipment.tracking_number }}</td>
+                <td>{{ shipment.agent_tracking_number if shipment.agent_tracking_number else '' }}</td>
+                <td>{{ shipment.third_party_tracking_number if shipment.third_party_tracking_number else '' }}</td>
                 <td>{{ shipment.customer.name if shipment.customer else '' }}</td>
                 <td>{{ shipment.agent.name if shipment.agent else '' }}</td>
                 <td>{{ shipment.channel }}</td>
@@ -47,7 +51,7 @@
             </tr>
             {% else %}
             <tr>
-                <td colspan="9" class="text-center">暂无运单</td>
+                <td colspan="11" class="text-center">暂无运单</td>
             </tr>
             {% endfor %}
         </tbody>

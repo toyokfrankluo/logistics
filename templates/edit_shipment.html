@@ -8,6 +8,10 @@
             <input type="text" name="tracking_number" class="form-control" value="{{ shipment.tracking_number }}" required>
         </div>
         <div class="mb-3">
+            <label class="form-label">NextSLS Shipment ID</label>
+            <input type="text" name="shipment_id" class="form-control" value="{{ shipment.shipment_id if shipment.shipment_id else '' }}">
+        </div>
+        <div class="mb-3">
             <label class="form-label">渠道</label>
             <input type="text" name="channel" class="form-control" value="{{ shipment.channel }}">
         </div>
@@ -24,7 +28,7 @@
             <input type="text" name="status" class="form-control" value="{{ shipment.status }}">
         </div>
         <button type="submit" class="btn btn-success">保存</button>
-        <a href="{{ url_for('list_shipments') }}" class="btn btn-secondary">取消</a>
+        <a href="{{ url_for('views.shipments') }}" class="btn btn-secondary">取消</a>
     </form>
 </div>
 {% endblock %}

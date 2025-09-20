@@ -1,4 +1,3 @@
-# views.py
 from flask import Blueprint, request, render_template, redirect, url_for, flash, send_file
 from models import db, CarrierAgent, Shipment, Customer, BankAccount, ManualTrack
 from flask_login import login_required, logout_user
@@ -55,22 +54,22 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
 
         # ========================
         # 2. NEXTSLS 接口 (nextsls)
-        #    使用 client_reference（客户单号）去查询
+        #    使用 shipment_id 去查询
         # ========================
         elif "nextsls.com" in (agent.api_url or ""):
+            # 根据 tracking_number 获取对应的 shipment
+            shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
+            if not shipment or not shipment.shipment_id:
+                return None, f"未找到对应的 shipment_id: {tracking_number}"
+
             url = agent.api_url
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {agent.app_token}"  # token 存在 app_token 字段
             }
             payload = {
-                "access_token": agent.app_token,
                 "shipment": {
-                    "shipment_id": "",
-                    "client_reference": tracking_number,  # 使用客户单号
-                    "tracking_number": "",
-                    "parcel_number": "",
-                    "waybill_number": "",
+                    "shipment_id": shipment.shipment_id,  # 使用 shipment_id
                     "language": "zh"
                 }
             }
@@ -204,6 +203,8 @@ def add_shipment():
 
         shipment = Shipment(
             tracking_number=tracking_number,
+            shipment_id=request.form.get("shipment_id"),  # 使用 shipment_id 替换 agent_tracking_number
+            third_party_tracking_number=request.form.get("third_party_tracking_number"),
             customer_id=request.form.get("customer_id") or None,
             agent_id=request.form.get("agent_id") or None,
             carrier_id=request.form.get("carrier_id"),
@@ -249,6 +250,8 @@ def edit_shipment(shipment_id):
             return redirect(url_for("views.edit_shipment", shipment_id=shipment_id))
 
         s.tracking_number = new_tracking_number
+        s.shipment_id = request.form.get("shipment_id", s.shipment_id)  # 使用 shipment_id 替换 agent_tracking_number
+        s.third_party_tracking_number = request.form.get("third_party_tracking_number", s.third_party_tracking_number)
         s.customer_id = request.form.get("customer_id") or None
         s.agent_id = request.form.get("agent_id") or None
         s.origin = request.form.get("origin")
@@ -500,6 +503,86 @@ def track():
                            message=message,
                            default_text=default_text,
                            public_mode=False)
+
+
+# -------------------------------
+# 17Track 轨迹查询
+# -------------------------------
+@views.route("/track_17track", methods=["GET", "POST"])
+@login_required
+def track_17track():
+    """
+    17Track轨迹查询功能
+    """
+    message, results, default_text = None, {}, ""
+    
+    if request.method == "POST":
+        numbers = request.form.get("numbers", "").strip().splitlines()
+        
+        if not numbers or numbers == [""]:
+            message = "请输入要查询的运单号"
+        else:
+            for no in numbers:
+                no = no.strip()
+                if not no:
+                    continue
+                    
+                # 调用17Track API进行查询
+                tracks, err = fetch_17track_tracking(no)
+                
+                if err:
+                    results[no] = {"tracks": "", "error": err}
+                else:
+                    results[no] = {"tracks": tracks, "error": None}
+                    
+            message = f"共查询到 {len(results)} 条结果"
+    
+    return render_template("track_17track.html",
+                           results=results,
+                           message=message,
+                           default_text=default_text)
+
+
+def fetch_17track_tracking(tracking_number):
+    """
+    调用17Track API获取轨迹信息
+    """
+    try:
+        # 17Track API 调用逻辑
+        # 这里需要根据17Track的实际API文档进行实现
+        # 以下是示例代码，需要根据实际情况修改
+        
+        # 示例：使用17Track的API
+        api_url = "https://api.17track.net/track/v2/gettrackinfo"
+        headers = {
+            "Content-Type": "application/json",
+            "17token": "YOUR_17TRACK_API_TOKEN"  # 需要替换为实际的API token
+        }
+        
+        payload = {
+            "number": tracking_number,
+            "carrier": None  # 自动识别快递公司
+        }
+        
+        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
+        
+        if response.status_code != 200:
+            return None, f"API返回错误 {response.status_code}"
+            
+        data = response.json()
+        
+        # 解析17Track返回的数据
+        if data.get("status") == 200 and data.get("data"):
+            tracks = []
+            for event in data["data"][0].get("track", []):
+                tracks.append(f"{event.get('time')} {event.get('location')} {event.get('description')}")
+            
+            return "\n".join(tracks), None
+        else:
+            return None, data.get("message", "查询失败")
+            
+    except Exception as e:
+        return None, f"API请求失败: {str(e)}"
 
 
 # -------------------------------

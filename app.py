@@ -91,6 +91,10 @@ PUBLIC_MODE = os.getenv("PUBLIC_MODE", "0") == "1"  # 公共查询页屏蔽批�
 CACHE = {}
 CACHE_TTL = int(os.getenv("CACHE_TTL", "600"))
 
+# 17Track API配置
+TRACK17_API_KEY = os.getenv("TRACK17_API_KEY", "")
+TRACK17_API_URL = os.getenv("TRACK17_API_URL", "https://api.17track.net/track/v2/gettrackinfo")
+
 # ------------------------------
 # 工具：sqlite 文件路径
 # ------------------------------
@@ -172,9 +176,10 @@ def ensure_sqlite_columns():
 
     db_file = Path(sqlite_path)
     if not db_file.exists():
-        app.logger.info(f"SQLite {sqlite_path} 不存在，create_all 会创建。")
+        app.logger.info(f"SQLite {sqlite_path} 不存在，create_all 已创建。")
         return
 
+    app.logger.info(f"开始检查并补列 SQLite 数据库: {sqlite_path}")
     try:
         with closing(sqlite3.connect(str(db_file))) as conn:
             cur = conn.cursor()
@@ -199,6 +204,7 @@ def ensure_sqlite_columns():
                     ("fee", "REAL DEFAULT 0"), ("surcharge_extra", "REAL DEFAULT 0"),
                     ("operation_fee", "REAL DEFAULT 0"), ("high_value_fee", "REAL DEFAULT 0"),
                     ("status", "TEXT"), ("note", "TEXT"),
+                    ("agent_tracking_number", "TEXT"), ("third_party_tracking_number", "TEXT"),
                     ("created_at", "TEXT"), ("updated_at", "TEXT")
                 ],
                 "manual_track": [
@@ -221,23 +227,175 @@ def ensure_sqlite_columns():
             for table, cols in patches.items():
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                 if cur.fetchone() is None:
-                    app.logger.info(f"表 {table} 不存在，交由 create_all。")
+                    app.logger.info(f"表 {table} 不存在，跳过补列（create_all 已处理）。")
                     continue
+                app.logger.info(f"检查表 {table} 的列...")
                 for col, typ in cols:
                     if not table_has_col(table, col):
                         sql = f"ALTER TABLE {table} ADD COLUMN {col} {typ}"
                         try:
                             cur.execute(sql)
-                            app.logger.info(f"已为 {table} 添加列 {col} ({typ})")
+                            app.logger.info(f"成功为 {table} 添加列 {col} ({typ})")
                         except Exception as e:
-                            app.logger.error(f"为 {table} 添加列 {col} 失败: {e}")
+                            app.logger.error(f"为 {table} 添加列 {col} 失败: {str(e)}")
+                    else:
+                        app.logger.debug(f"表 {table} 已存在列 {col}，跳过。")
 
             conn.commit()
+            app.logger.info("补列操作完成。")
     except Exception as e:
-        app.logger.exception(f"尝试补列时出错: {e}")
+        app.logger.exception(f"补列过程中发生全局错误: {str(e)}")
 
 # ------------------------------
-# 多货代 API：gettrack
+# 17Track API 调用函数
+# ------------------------------
+def call_17track(tracking_number):
+    """调用17Track API获取轨迹信息"""
+    if not TRACK17_API_KEY:
+        return {"error": "17Track API密钥未配置"}
+    
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "17token": TRACK17_API_KEY
+        }
+        
+        payload = {
+            "number": tracking_number,
+            "carrier": None  # 自动识别快递公司
+        }
+        
+        response = requests.post(TRACK17_API_URL, headers=headers, json=payload, timeout=15)
+        
+        if response.status_code != 200:
+            return {"error": f"17Track API返回错误 {response.status_code}"}
+            
+        data = response.json()
+        
+        # 检查API响应状态
+        if data.get("status") != 200:
+            return {"error": f"17Track API错误: {data.get('message', '未知错误')}"}
+            
+        # 解析轨迹数据
+        tracks = []
+        if data.get("data") and isinstance(data["data"], list) and len(data["data"]) > 0:
+            for event in data["data"][0].get("track", []):
+                tracks.append({
+                    "track_occur_date": event.get("time", ""),
+                    "track_location": event.get("location", ""),
+                    "track_description": event.get("description", event.get("info", ""))
+                })
+        
+        return {
+            "success": "1",
+            "cnmessage": "17Track轨迹查询成功",
+            "data": [{"details": tracks}]
+        }
+        
+    except Exception as e:
+        return {"error": f"17Track API请求失败: {str(e)}"}
+
+# ------------------------------
+# NextSLS API 调用函数（通用版本）
+# ------------------------------
+def call_nextsls(agent, tracking_number):
+    """调用NextSLS API获取轨迹信息（通用版本）"""
+    try:
+        # 使用代理配置的API URL
+        url = agent.api_url
+        if not url:
+            return {"error": "未配置NextSLS API地址"}
+        
+        # 根据NextSLS文档构建请求头
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        # 添加认证信息（根据不同代理的配置方式）
+        if agent.app_token:
+            headers["Authorization"] = f"Bearer {agent.app_token}"
+        
+        # 构建请求体 - 支持多种查询方式
+        payload = {}
+        
+        # 方式1: 使用客户参考号（client_reference）查询
+        payload["shipment"] = {
+            "client_reference": tracking_number,
+            "language": "zh"
+        }
+        
+        # 方式2: 如果有access_token参数，添加到请求中（某些NextSLS版本需要）
+        if agent.app_token and "access_token" not in payload:
+            payload["access_token"] = agent.app_token
+            
+        # 方式3: 某些NextSLS版本可能需要不同的参数结构
+        # 这里可以根据代理的具体配置进行调整
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        
+        if response.status_code != 200:
+            return {"error": f"NextSLS API返回错误 {response.status_code}: {response.text}"}
+            
+        data = response.json()
+        
+        # 检查API响应状态 - 支持多种响应格式
+        if data.get("status") not in [1, "1", 200, "200", True]:
+            error_msg = data.get("info") or data.get("message") or data.get("error") or "未知错误"
+            return {"error": f"NextSLS API错误: {error_msg}"}
+            
+        # 解析轨迹数据 - 支持多种响应格式
+        tracks = []
+        
+        # 格式1: data.shipment.traces (标准NextSLS格式)
+        if data.get("data") and data["data"].get("shipment"):
+            shipment_data = data["data"]["shipment"]
+            for trace in shipment_data.get("traces", []):
+                # 转换时间戳为日期时间字符串
+                timestamp = trace.get("time")
+                if timestamp and isinstance(timestamp, int):
+                    time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    time_str = trace.get("time", "")
+                    
+                tracks.append({
+                    "track_occur_date": time_str,
+                    "track_location": trace.get("location", ""),
+                    "track_description": trace.get("info", trace.get("description", ""))
+                })
+        
+        # 格式2: 直接包含tracks数组
+        elif data.get("tracks"):
+            for trace in data.get("tracks", []):
+                tracks.append({
+                    "track_occur_date": trace.get("occur_date", trace.get("time", "")),
+                    "track_location": trace.get("location", ""),
+                    "track_description": trace.get("info", trace.get("description", ""))
+                })
+        
+        # 格式3: 其他可能的格式
+        elif data.get("data") and isinstance(data["data"], list):
+            for item in data["data"]:
+                tracks.append({
+                    "track_occur_date": item.get("occur_date", item.get("time", "")),
+                    "track_location": item.get("location", ""),
+                    "track_description": item.get("info", item.get("description", ""))
+                })
+        
+        # 如果没有找到轨迹数据，返回错误
+        if not tracks:
+            return {"error": "未找到轨迹信息"}
+        
+        return {
+            "success": "1",
+            "cnmessage": "NextSLS轨迹查询成功",
+            "data": [{"details": tracks}]
+        }
+        
+    except Exception as e:
+        return {"error": f"NextSLS API请求失败: {str(e)}"}
+
+# ------------------------------
+# 多货代 API：gettrack（更新NextSLS检测逻辑）
 # ------------------------------
 def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=15):
     if not tracking_number:
@@ -257,7 +415,6 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             return None
         if not s.manual_tracks:
             return None
-        # 组装为统一格式
         details = []
         for t in sorted(s.manual_tracks, key=lambda x: (x.happen_time or x.created_at or datetime.utcnow()), reverse=True):
             details.append({
@@ -271,21 +428,52 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             "data": [{"details": details}]
         }
 
+    # 从数据库获取 shipment，使用 agent_tracking_number 作为 shipment_id
+    shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
+    if not shipment:
+        return {"error": f"未找到运单号: {tracking_number}"}
+
+    shipment_id_to_use = shipment.agent_tracking_number  # 明确使用 agent_tracking_number 作为 shipment_id
+    if not shipment_id_to_use:
+        return {"error": f"未找到对应的 shipment_id（agent_tracking_number）: {tracking_number}"}
+
     # 使用 DB agent
-    if agent_id:
-        agent = CarrierAgent.query.get(int(agent_id))
+    if agent_id or shipment.agent_id:
+        agent = CarrierAgent.query.get(int(agent_id or shipment.agent_id))
         if not agent or not agent.is_active:
             data = {"error": "未找到指定代理或已停用"}
             CACHE[cache_key] = (now, data)
             return data
 
-        # 若代理被标记为不支持 API，直接返回手工轨迹
         if not agent.supports_api:
             data = local_manual() or {"error": "该代理不支持抓取，且无手工轨迹"}
             CACHE[cache_key] = (now, data)
             return data
 
-        api_url = agent.api_url or DEFAULT_API_URL
+        is_nextsls = "nextsls" in agent.api_url.lower() or "sls" in agent.api_url.lower()
+        if is_nextsls:
+            payload = {
+                "shipment": {
+                    "shipment_id": shipment_id_to_use,  # 使用 agent_tracking_number 作为 shipment_id
+                    "language": "zh"
+                }
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {agent.app_token or API_TOKEN}"  # 使用 agent 的 token 或默认 token
+            }
+            try:
+                r = requests.post(agent.api_url or API_URL, json=payload, headers=headers, timeout=timeout)
+                r.encoding = "utf-8"
+                data = r.json()
+                if data.get("status") != 1:
+                    data["hint"] = f"疑似 shipment_id 错误: {shipment_id_to_use}"
+                CACHE[cache_key] = (now, data)
+                return data
+            except Exception as e:
+                data = {"error": f"请求代理接口出错: {e}"}
+                CACHE[cache_key] = (now, data)
+                return data
 
         # 优先 RTB56 风格
         if (agent.app_key or agent.app_token):
@@ -303,7 +491,7 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
                     data = r.json()
                 except Exception:
                     data = {"raw_text": r.text}
-                # 如果返回 “appToken传递错误,客户不存在”等，附加提示
+                # 如果返回 "appToken传递错误,客户不存在"等，附加提示
                 if isinstance(data, dict) and data.get("success") == "0" and "appToken" in (data.get("cnmessage") or ""):
                     data["hint"] = "疑似 appKey/appToken 或客户号配置错误，或该代理未开通 API 权限"
                 CACHE[cache_key] = (now, data)
@@ -614,6 +802,10 @@ def add_shipment():
             flash("请填写运单号")
             return redirect(url_for("add_shipment"))
 
+        # 获取 shipment_id
+        shipment_id = request.form.get("shipment_id", "").strip()
+        third_party_tracking_number = request.form.get("third_party_tracking_number", "").strip()
+
         # 可选字段
         customer_id = request.form.get("customer_id") or None
         agent_id = request.form.get("agent_id") or None
@@ -636,6 +828,8 @@ def add_shipment():
 
         s = Shipment(
             tracking_number=tn,
+            shipment_id=shipment_id,  # 使用 shipment_id
+            third_party_tracking_number=third_party_tracking_number,
             carrier_id=carrier_id,
             agent_id=int(agent_id) if agent_id else None,
             customer_id=int(customer_id) if customer_id else None,
@@ -706,6 +900,10 @@ def import_shipments():
 def edit_shipment(sid):
     s = Shipment.query.get_or_404(sid)
     if request.method == "POST":
+        # 更新新字段
+        s.agent_tracking_number = request.form.get("agent_tracking_number", s.agent_tracking_number)
+        s.third_party_tracking_number = request.form.get("third_party_tracking_number", s.third_party_tracking_number)
+        
         for f in ["destination", "channel", "product_type", "note", "status", "origin"]:
             setattr(s, f, request.form.get(f, getattr(s, f)))
         s.customer_id = int(request.form.get("customer_id")) if request.form.get("customer_id") else s.customer_id
@@ -724,6 +922,8 @@ def edit_shipment(sid):
     return render_template_string("""
     <h3>编辑运单 {{s.tracking_number}}</h3>
     <form method="post">
+      代理系统单号 <input name="agent_tracking_number" value="{{s.agent_tracking_number or ''}}"><br>
+      17Track单号 <input name="third_party_tracking_number" value="{{s.third_party_tracking_number or ''}}"><br>
       目的地 <input name="destination" value="{{s.destination or ''}}"><br>
       渠道 <input name="channel" value="{{s.channel or ''}}"><br>
       产品类型 <input name="product_type" value="{{s.product_type or ''}}"><br>
@@ -902,8 +1102,12 @@ from datetime import datetime
 from flask import request, redirect, url_for, flash, render_template_string, jsonify
 from flask_login import login_required, current_user
 
-from utils import call_gettrack, format_tracks_from_data, render_template_safe
-from models import db, Shipment, ManualTrack, CarrierAgent, Customer
+# 注意：utils.py 如果存在 call_gettrack 等，需确保导入正确
+# 假设 utils.py 有这些函数
+try:
+    from utils import call_gettrack, format_tracks_from_data
+except ImportError:
+    pass  # 如果没有，忽略或定义
 
 # ------------------------------
 # 手工轨迹
@@ -967,7 +1171,6 @@ def track():
         if default_text:
             numbers = [ln.strip() for ln in default_text.splitlines() if ln.strip()]
 
-        # 如果未输入单号，可以按代理/客户自动取（最多 30）
         if not numbers:
             q = Shipment.query
             if agent_id:
@@ -983,19 +1186,11 @@ def track():
                 numbers = numbers[:30]
 
         for n in numbers:
-            s = Shipment.query.filter_by(tracking_number=n).first()
-            data = None
-            if s and s.agent_id:
-                data = call_gettrack(None, n, agent_id=s.agent_id)
-            elif s and s.carrier_id:
-                data = call_gettrack(s.carrier_id, n, agent_id=None)
-            elif agent_id:
-                data = call_gettrack(None, n, agent_id=int(agent_id))
-            elif forced_carrier:
-                data = call_gettrack(forced_carrier, n, agent_id=None)
+            shipment = Shipment.query.filter_by(tracking_number=n).first()
+            if shipment and shipment.agent_tracking_number:
+                data = call_gettrack(None, n, agent_id=agent_id or shipment.agent_id)
             else:
-                data = call_gettrack(None, n, agent_id=None)
-
+                data = {"error": f"未找到对应的 shipment_id（agent_tracking_number）: {n}"}
             if isinstance(data, dict) and data.get("error"):
                 results[n] = {"error": data.get("error"), "tracks": None, "raw": data}
             else:
@@ -1026,12 +1221,20 @@ def public_track_page():
             for n in lines:
                 s = Shipment.query.filter_by(tracking_number=n).first()
                 data = None
-                if s and s.agent_id:
-                    data = call_gettrack(None, n, agent_id=s.agent_id)
-                elif s and s.carrier_id:
-                    data = call_gettrack(s.carrier_id, n, agent_id=None)
-                else:
-                    data = call_gettrack(None, n, agent_id=None)
+                
+                # 优先尝试17Track查询（如果有17Track单号）
+                if s and s.third_party_tracking_number:
+                    data = call_17track(s.third_party_tracking_number)
+                
+                # 如果没有17Track结果，尝试常规查询
+                if not data or (isinstance(data, dict) and data.get("error")):
+                    if s and s.agent_id:
+                        data = call_gettrack(None, n, agent_id=s.agent_id)
+                    elif s and s.carrier_id:
+                        data = call_gettrack(s.carrier_id, n, agent_id=None)
+                    else:
+                        data = call_gettrack(None, n, agent_id=None)
+                
                 if isinstance(data, dict) and data.get("error"):
                     results[n] = {"error": data.get("error"), "tracks": None, "raw": data}
                 else:
@@ -1068,6 +1271,15 @@ def api_track_one(carrier_id, tracking_number):
 def api_track_by_agent(agent_id, tracking_number):
     data = call_gettrack(None, tracking_number, agent_id=agent_id)
     return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+
+# ------------------------------
+# 17Track API 路由
+# ------------------------------
+@app.route("/api/17track/<tracking_number>")
+def api_17track(tracking_number):
+    data = call_17track(tracking_number)
+    return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+
 # ------------------------------
 # 新增路由，渲染前端页面
 # ------------------------------
@@ -1088,12 +1300,20 @@ def public_track_json():
             return jsonify({"error": "缺少 order_id 参数"}), 400
 
         s = Shipment.query.filter_by(tracking_number=order_id).first()
-        if s and s.agent_id:
-            result_data = call_gettrack(None, order_id, agent_id=s.agent_id)
-        elif s and s.carrier_id:
-            result_data = call_gettrack(s.carrier_id, order_id, agent_id=None)
-        else:
-            result_data = call_gettrack(None, order_id, agent_id=None)
+        result_data = None
+        
+        # 优先尝试17Track查询（如果有17Track单号）
+        if s and s.third_party_tracking_number:
+            result_data = call_17track(s.third_party_tracking_number)
+        
+        # 如果没有17Track结果，尝试常规查询
+        if not result_data or (isinstance(result_data, dict) and result_data.get("error")):
+            if s and s.agent_id:
+                result_data = call_gettrack(None, order_id, agent_id=s.agent_id)
+            elif s and s.carrier_id:
+                result_data = call_gettrack(s.carrier_id, order_id, agent_id=None)
+            else:
+                result_data = call_gettrack(None, order_id, agent_id=None)
 
         if isinstance(result_data, dict) and result_data.get("error"):
             return jsonify({"order_id": order_id, "error": result_data.get("error"), "tracks": []})
@@ -1102,6 +1322,7 @@ def public_track_json():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 # ------------------------------
 # 账单手工导出（保留）
 # ------------------------------
@@ -1149,10 +1370,7 @@ def ensure_admin_user():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        try:
-            ensure_sqlite_columns()
-        except Exception:
-            app.logger.exception("ensure_sqlite_columns 发生异常")
+        ensure_sqlite_columns()  # 移除 try-except，让错误冒泡以便调试
         ensure_admin_user()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
 
