@@ -233,9 +233,8 @@ def add_shipment():
             import os
             
             # 从环境变量获取Supabase配置（更安全）
-            supabase_url = os.getenv('SUPABASE_URL', 'https://qxfzltryagnyiderbljf.supabase.co')
-            supabase_key = os.getenv('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4')
-            
+            supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
+            supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
             # 获取客户名称
             customer_name = "未知客户"
             if shipment.customer_id:
@@ -834,8 +833,13 @@ def sync_tracking_details():
         from datetime import datetime
         
         # 获取Supabase配置
-        supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_KEY')
+        supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
+        supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
+
+        print(f"🔧 环境变量 SUPABASE_URL: {os.environ.get('SUPABASE_URL')}")
+        print(f"🔧 环境变量 SUPABASE_KEY: {os.environ.get('SUPABASE_KEY')}")
+        print(f"🔧 使用的URL: {supabase_url}")
+        print(f"🔧 使用的KEY: {supabase_key[:20]}...")
         
         if not supabase_url or not supabase_key:
             flash("Supabase配置缺失", "danger")
