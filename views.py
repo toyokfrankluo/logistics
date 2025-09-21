@@ -835,33 +835,31 @@ def sync_tracking_details():
         # 获取Supabase配置
         supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
         supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
-
-        print(f"🔧 环境变量 SUPABASE_URL: {os.environ.get('SUPABASE_URL')}")
-        print(f"🔧 环境变量 SUPABASE_KEY: {os.environ.get('SUPABASE_KEY')}")
-        print(f"🔧 使用的URL: {supabase_url}")
-        print(f"🔧 使用的KEY: {supabase_key[:20]}...")
         
-        if not supabase_url or not supabase_key:
-            flash("Supabase配置缺失", "danger")
-            return redirect(url_for("views.shipments"))
+        print(f"🔄 开始同步轨迹信息")
+        print(f"🔗 Supabase URL: {supabase_url}")
         
         # 获取所有有代理的运单
         shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).all()
         success_count = 0
         error_count = 0
         
-        print(f"🔄 开始同步 {len(shipments)} 个运单的轨迹信息")
+        print(f"📦 找到 {len(shipments)} 个需要同步的运单")
         
         for shipment in shipments:
             try:
                 agent = CarrierAgent.query.get(shipment.agent_id)
                 if agent and agent.supports_api:
-                    print(f"📦 处理运单: {shipment.tracking_number}")
+                    print(f"🔍 处理运单: {shipment.tracking_number}, 代理: {agent.name}")
                     
                     # 调用轨迹API
                     tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
                     
+                    print(f"📊 API返回: {len(tracks) if tracks else 0} 条轨迹, 错误: {error}")
+                    
                     if tracks and not error:
+                        print(f"✅ 开始同步 {len(tracks)} 条轨迹到Supabase")
+                        
                         for track in tracks:
                             # 处理时间格式
                             event_time = track.get('time')
@@ -875,6 +873,16 @@ def sync_tracking_details():
                                 "description": track.get('description', track.get('info', track.get('status', '')))
                             }
                             
+                            print(f"📝 准备写入: {track_data['description'][:50]}...")
+                            
+                            # 测试Supabase连接
+                            test_response = requests.get(
+                                f"{supabase_url}/rest/v1/shipment_tracking_details?select=count&apikey={supabase_key}",
+                                timeout=5
+                            )
+                            print(f"🧪 Supabase连接测试: {test_response.status_code}")
+                            
+                            # 写入数据
                             response = requests.post(
                                 f"{supabase_url}/rest/v1/shipment_tracking_details",
                                 headers={
@@ -887,24 +895,36 @@ def sync_tracking_details():
                                 timeout=10
                             )
                             
+                            print(f"📨 写入响应: {response.status_code}, {response.text}")
+                            
                             if response.status_code in [200, 201, 204]:
                                 success_count += 1
+                                print(f"✅ 轨迹写入成功")
                             else:
                                 error_count += 1
+                                print(f"❌ 轨迹写入失败")
                     
                     else:
-                        print(f"⚠️ 无法获取 {shipment.tracking_number} 的轨迹: {error}")
+                        print(f"⚠️ 无法获取轨迹: {error}")
                         error_count += 1
+                        
+                else:
+                    print(f"⏭️ 跳过运单 {shipment.tracking_number}: 代理不支持API")
+                    error_count += 1
                         
             except Exception as e:
                 error_count += 1
                 print(f"🔥 处理 {shipment.tracking_number} 时出错: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
+        print(f"🎯 同步完成: 成功 {success_count}, 失败 {error_count}")
         flash(f"轨迹同步完成！成功: {success_count}, 失败: {error_count}", "success")
         
     except Exception as e:
-        flash(f"轨迹同步过程出错: {str(e)}", "danger")
+        print(f"💥 同步过程严重错误: {str(e)}")
         import traceback
         traceback.print_exc()
+        flash(f"轨迹同步过程出错: {str(e)}", "danger")
     
     return redirect(url_for("views.shipments"))
