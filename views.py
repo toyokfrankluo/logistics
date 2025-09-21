@@ -5,6 +5,7 @@ from datetime import datetime
 from utils import export_invoice
 import requests
 import json
+import os
 
 views = Blueprint("views", __name__)
 
@@ -59,8 +60,18 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
         elif "nextsls.com" in (agent.api_url or ""):
             # 根据 tracking_number 获取对应的 shipment
             shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
-            if not shipment or not shipment.shipment_id:
-                return None, f"未找到对应的 shipment_id: {tracking_number}"
+            
+            # 修复：处理shipment_id缺失的情况
+            if not shipment:
+                # 尝试直接使用tracking_number作为shipment_id
+                shipment_id = tracking_number
+                print(f"⚠️ 未找到shipment记录，使用tracking_number作为shipment_id: {shipment_id}")
+            elif not shipment.shipment_id:
+                # 有shipment记录但没有shipment_id，使用tracking_number
+                shipment_id = tracking_number
+                print(f"⚠️ shipment记录缺少shipment_id，使用tracking_number: {shipment_id}")
+            else:
+                shipment_id = shipment.shipment_id
 
             url = agent.api_url
             headers = {
@@ -69,7 +80,7 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
             }
             payload = {
                 "shipment": {
-                    "shipment_id": shipment.shipment_id,  # 使用 shipment_id
+                    "shipment_id": shipment_id,  # 使用 shipment_id 或 tracking_number
                     "language": "zh"
                 }
             }
@@ -123,6 +134,87 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
 
     except Exception as e:
         return None, f"API请求失败: {str(e)}"
+
+
+# =============== 新增：去重同步函数 ===============
+def sync_tracking_to_supabase(shipment, tracks):
+    """
+    同步轨迹数据到Supabase，避免重复数据
+    """
+    try:
+        supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
+        supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
+        
+        success_count = 0
+        error_count = 0
+        
+        for track in tracks:
+            try:
+                # 生成唯一标识符，用于检查重复
+                event_time = track.get('time')
+                if not event_time:
+                    event_time = datetime.utcnow().isoformat()
+                
+                location = track.get('location', '')
+                description = track.get('description', track.get('info', track.get('status', '')))
+                
+                # 检查是否已存在相同记录
+                check_response = requests.get(
+                    f"{supabase_url}/rest/v1/shipment_tracking_details",
+                    params={
+                        "tracking_number": f"eq.{shipment.tracking_number}",
+                        "event_time": f"eq.{event_time}",
+                        "description": f"eq.{description}",
+                        "select": "id"
+                    },
+                    headers={
+                        "Authorization": f"Bearer {supabase_key}",
+                        "apikey": supabase_key
+                    },
+                    timeout=5
+                )
+                
+                # 如果记录已存在，跳过插入
+                if check_response.status_code == 200 and len(check_response.json()) > 0:
+                    print(f"⏭️ 跳过重复轨迹: {description[:50]}...")
+                    continue
+                
+                track_data = {
+                    "tracking_number": shipment.tracking_number,
+                    "event_time": event_time,
+                    "location": location,
+                    "description": description
+                }
+                
+                # 插入新记录
+                response = requests.post(
+                    f"{supabase_url}/rest/v1/shipment_tracking_details",
+                    headers={
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                        "apikey": supabase_key,
+                        "Prefer": "return=minimal"
+                    },
+                    data=json.dumps(track_data),
+                    timeout=10
+                )
+                
+                if response.status_code in [200, 201, 204]:
+                    success_count += 1
+                    print(f"✅ 轨迹同步成功: {description[:50]}...")
+                else:
+                    error_count += 1
+                    print(f"❌ 轨迹同步失败: {response.status_code}")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"🔥 单条轨迹同步异常: {str(e)}")
+        
+        return success_count, error_count
+        
+    except Exception as e:
+        print(f"💥 轨迹同步过程出错: {str(e)}")
+        return 0, 1
 
 
 # -------------------------------
@@ -228,10 +320,6 @@ def add_shipment():
         
         # =============== 优化后的Supabase同步代码 ===============
         try:
-            import requests
-            import json
-            import os
-            
             # 从环境变量获取Supabase配置（更安全）
             supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
             supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
@@ -289,7 +377,7 @@ def add_shipment():
             flash("运单已保存，但同步到查询系统时出现异常", "warning")
         # =============== 同步代码结束 ===============
         
-        # =============== 新增：轨迹同步代码 ===============
+        # =============== 修改：轨迹同步代码 ===============
         try:
             # 只有有代理的运单才获取轨迹
             if shipment.agent_id:
@@ -303,37 +391,9 @@ def add_shipment():
                     if tracks and not error:
                         print(f"✅ 获取到 {len(tracks)} 条轨迹信息")
                         
-                        # 同步每条轨迹到Supabase
-                        for track in tracks:
-                            # 处理时间格式
-                            event_time = track.get('time')
-                            if not event_time:
-                                event_time = datetime.utcnow().isoformat()
-                            
-                            track_data = {
-                                "tracking_number": shipment.tracking_number,
-                                "event_time": event_time,
-                                "location": track.get('location', ''),
-                                "description": track.get('description', track.get('info', track.get('status', '')))
-                            }
-                            
-                            response = requests.post(
-                                f"{supabase_url}/rest/v1/shipment_tracking_details",
-                                headers={
-                                    "Authorization": f"Bearer {supabase_key}",
-                                    "Content-Type": "application/json",
-                                    "apikey": supabase_key,
-                                    "Prefer": "return=minimal"
-                                },
-                                data=json.dumps(track_data),
-                                timeout=10
-                            )
-                            
-                            if response.status_code in [200, 201, 204]:
-                                print(f"✅ 同步轨迹成功: {track_data['description'][:50]}...")
-                            else:
-                                print(f"❌ 轨迹同步失败: {response.status_code}")
-                                
+                        # 使用优化后的同步函数
+                        success_count, error_count = sync_tracking_to_supabase(shipment, tracks)
+                        print(f"📊 轨迹同步结果: 成功 {success_count}, 失败 {error_count}")
                     else:
                         print(f"⚠️ 无法获取轨迹: {error}")
                         
@@ -445,12 +505,9 @@ def manual_tracks(shipment_id):
         
         # =============== 新增代码：同步手工轨迹到Supabase ===============
         try:
-            import requests
-            import json
-            
             # 更新Supabase中的轨迹信息
-            supabase_url = "https://您的项目ID.supabase.co"
-            supabase_key = "您的anon-public-key"
+            supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
+            supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
             
             # 更新当前位置和状态
             update_data = {
@@ -755,12 +812,8 @@ def logout():
 def sync_to_supabase():
     """手动同步所有运单基本信息到Supabase"""
     try:
-        import requests
-        import json
-        import os
-        
-        supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_KEY')
+        supabase_url = os.getenv('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
+        supabase_key = os.getenv('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc極IiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
         
         if not supabase_url or not supabase_key:
             flash("Supabase配置缺失", "danger")
@@ -821,28 +874,22 @@ def sync_to_supabase():
     return redirect(url_for("views.shipments"))
 
 
-# =============== 新增：轨迹同步路由 ===============
+# =============== 修改：轨迹同步路由 ===============
 @views.route("/admin/sync-tracking-details")
 @login_required
 def sync_tracking_details():
-    """手动同步所有运单的轨迹信息"""
+    """手动同步所有运单的轨迹信息（已优化去重）"""
     try:
-        import requests
-        import json
-        import os
-        from datetime import datetime
-        
         # 获取Supabase配置
         supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
-        supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
+        supabase_key = os.environ.get('SUPABASE_KEY') or 'eyJhbGciOiJIUzI1NiIsInR5c極I6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4ZnpsdHJ5YWdueWlkZXJibGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc3NTE4ODIsImV4cCI6MjA3MzMyNzg4Mn0.K90fwI3dwNJRXvIutvxhzzyVLjzgO7bfykAE26ZqGX4'
         
-        print(f"🔄 开始同步轨迹信息")
-        print(f"🔗 Supabase URL: {supabase_url}")
+        print(f"🔄 开始同步轨迹信息（优化去重版）")
         
         # 获取所有有代理的运单
         shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).all()
-        success_count = 0
-        error_count = 0
+        total_success = 0
+        total_error = 0
         
         print(f"📦 找到 {len(shipments)} 个需要同步的运单")
         
@@ -858,73 +905,27 @@ def sync_tracking_details():
                     print(f"📊 API返回: {len(tracks) if tracks else 0} 条轨迹, 错误: {error}")
                     
                     if tracks and not error:
-                        print(f"✅ 开始同步 {len(tracks)} 条轨迹到Supabase")
-                        
-                        for track in tracks:
-                            # 处理时间格式
-                            event_time = track.get('time')
-                            if not event_time:
-                                event_time = datetime.utcnow().isoformat()
-                            
-                            track_data = {
-                                "tracking_number": shipment.tracking_number,
-                                "event_time": event_time,
-                                "location": track.get('location', ''),
-                                "description": track.get('description', track.get('info', track.get('status', '')))
-                            }
-                            
-                            print(f"📝 准备写入: {track_data['description'][:50]}...")
-                            
-                            # 测试Supabase连接
-                            test_response = requests.get(
-                                f"{supabase_url}/rest/v1/shipment_tracking_details?select=count&apikey={supabase_key}",
-                                timeout=5
-                            )
-                            print(f"🧪 Supabase连接测试: {test_response.status_code}")
-                            
-                            # 写入数据
-                            response = requests.post(
-                                f"{supabase_url}/rest/v1/shipment_tracking_details",
-                                headers={
-                                    "Authorization": f"Bearer {supabase_key}",
-                                    "Content-Type": "application/json",
-                                    "apikey": supabase_key,
-                                    "Prefer": "return=minimal"
-                                },
-                                data=json.dumps(track_data),
-                                timeout=10
-                            )
-                            
-                            print(f"📨 写入响应: {response.status_code}, {response.text}")
-                            
-                            if response.status_code in [200, 201, 204]:
-                                success_count += 1
-                                print(f"✅ 轨迹写入成功")
-                            else:
-                                error_count += 1
-                                print(f"❌ 轨迹写入失败")
-                    
+                        # 使用优化后的同步函数
+                        success_count, error_count = sync_tracking_to_supabase(shipment, tracks)
+                        total_success += success_count
+                        total_error += error_count
+                        print(f"📊 运单 {shipment.tracking_number} 同步结果: 成功 {success_count}, 失败 {error_count}")
                     else:
                         print(f"⚠️ 无法获取轨迹: {error}")
-                        error_count += 1
-                        
+                        total_error += 1
                 else:
                     print(f"⏭️ 跳过运单 {shipment.tracking_number}: 代理不支持API")
-                    error_count += 1
+                    total_error += 1
                         
             except Exception as e:
-                error_count += 1
+                total_error += 1
                 print(f"🔥 处理 {shipment.tracking_number} 时出错: {str(e)}")
-                import traceback
-                traceback.print_exc()
         
-        print(f"🎯 同步完成: 成功 {success_count}, 失败 {error_count}")
-        flash(f"轨迹同步完成！成功: {success_count}, 失败: {error_count}", "success")
+        print(f"🎯 同步完成: 成功 {total_success}, 失败 {total_error}")
+        flash(f"轨迹同步完成！成功: {total_success}, 失败: {total_error}", "success")
         
     except Exception as e:
         print(f"💥 同步过程严重错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
         flash(f"轨迹同步过程出错: {str(e)}", "danger")
     
     return redirect(url_for("views.shipments"))
