@@ -1,6 +1,7 @@
 from flask import Blueprint, request, render_template, redirect, url_for, flash, send_file
 from models import db, CarrierAgent, Shipment, Customer, BankAccount, ManualTrack
 from flask_login import login_required, logout_user
+from models import db, CarrierAgent, Shipment, Customer, BankAccount, ManualTrack
 from datetime import datetime
 from utils import export_invoice
 import requests
@@ -280,7 +281,21 @@ def delete_agent(agent_id):
 @views.route("/shipments")
 @login_required
 def shipments():
-    data = Shipment.query.order_by(Shipment.created_at.desc()).all()
+    query = Shipment.query.order_by(Shipment.created_at.desc())
+
+    # 从 URL 获取查询参数
+    customer = request.args.get("customer")
+    agent = request.args.get("agent")
+    tracking_number = request.args.get("tracking_number")
+
+    if customer:
+        query = query.join(Customer).filter(Customer.name.ilike(f"%{customer}%"))
+    if agent:
+        query = query.join(CarrierAgent).filter(CarrierAgent.name.ilike(f"%{agent}%"))
+    if tracking_number:
+        query = query.filter(Shipment.tracking_number.ilike(f"%{tracking_number}%"))
+
+    data = query.all()
     return render_template("shipments.html", shipments=data)
 
 

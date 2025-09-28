@@ -2,7 +2,20 @@
 {% block content %}
 <div class="container mt-4">
     <h2>运单管理</h2>
+
+    <!-- 搜索框 -->
+    <div class="mb-3">
+        <form method="get" action="{{ url_for('views.shipments') }}" class="form-inline">
+            <input type="text" name="customer" class="form-control mr-2" placeholder="按客户查询" value="{{ request.args.get('customer', '') }}">
+            <input type="text" name="agent" class="form-control mr-2" placeholder="按代理查询" value="{{ request.args.get('agent', '') }}">
+            <input type="text" name="tracking_number" class="form-control mr-2" placeholder="按运单号搜索" value="{{ request.args.get('tracking_number', '') }}">
+            <button type="submit" class="btn btn-secondary">搜索</button>
+            <a href="{{ url_for('views.shipments') }}" class="btn btn-light ml-2">重置</a>
+        </form>
+    </div>
+
     <a href="{{ url_for('views.add_shipment') }}" class="btn btn-primary mb-3">新增运单</a>
+
     <table class="table table-striped">
         <thead>
             <tr>
