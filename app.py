@@ -395,7 +395,7 @@ def call_nextsls(agent, tracking_number):
         return {"error": f"NextSLS API请求失败: {str(e)}"}
 
 # ------------------------------
-# 多货代 API：gettrack（更新NextSLS检测逻辑）
+# 多货代 API：gettrack（TXFBA 强制 POST 版本）
 # ------------------------------
 def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=15):
     if not tracking_number:
@@ -408,12 +408,12 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
         if now - ts < CACHE_TTL:
             return data
 
-    # 先查本地手工轨迹（无论是否支持 API，都可以作为补充/兜底）
+    # ------------------------------
+    # 本地手工轨迹
+    # ------------------------------
     def local_manual():
         s = Shipment.query.filter_by(tracking_number=tracking_number).first()
-        if not s:
-            return None
-        if not s.manual_tracks:
+        if not s or not s.manual_tracks:
             return None
         details = []
         for t in sorted(s.manual_tracks, key=lambda x: (x.happen_time or x.created_at or datetime.utcnow()), reverse=True):
@@ -428,16 +428,20 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             "data": [{"details": details}]
         }
 
-    # 从数据库获取 shipment，使用 agent_tracking_number 作为 shipment_id
+    # ------------------------------
+    # 获取 shipment
+    # ------------------------------
     shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
     if not shipment:
         return {"error": f"未找到运单号: {tracking_number}"}
 
-    shipment_id_to_use = shipment.agent_tracking_number  # 明确使用 agent_tracking_number 作为 shipment_id
+    shipment_id_to_use = shipment.agent_tracking_number
     if not shipment_id_to_use:
         return {"error": f"未找到对应的 shipment_id（agent_tracking_number）: {tracking_number}"}
 
+    # ------------------------------
     # 使用 DB agent
+    # ------------------------------
     if agent_id or shipment.agent_id:
         agent = CarrierAgent.query.get(int(agent_id or shipment.agent_id))
         if not agent or not agent.is_active:
@@ -450,17 +454,20 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             CACHE[cache_key] = (now, data)
             return data
 
-        is_nextsls = "nextsls" in agent.api_url.lower() or "sls" in agent.api_url.lower()
+        # ----------------
+        # NextSLS 逻辑
+        # ----------------
+        is_nextsls = "nextsls" in (agent.api_url or "").lower() or "sls" in (agent.api_url or "").lower()
         if is_nextsls:
             payload = {
                 "shipment": {
-                    "shipment_id": shipment_id_to_use,  # 使用 agent_tracking_number 作为 shipment_id
+                    "shipment_id": shipment_id_to_use,
                     "language": "zh"
                 }
             }
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {agent.app_token or API_TOKEN}"  # 使用 agent 的 token 或默认 token
+                "Authorization": f"Bearer {agent.app_token or API_TOKEN}"
             }
             try:
                 r = requests.post(agent.api_url or API_URL, json=payload, headers=headers, timeout=timeout)
@@ -475,8 +482,10 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
                 CACHE[cache_key] = (now, data)
                 return data
 
-        # 优先 RTB56 风格
-        if (agent.app_key or agent.app_token):
+        # ----------------
+        # TXFBA 强制 POST
+        # ----------------
+        if "txfba.com" in (agent.api_url or "").lower():
             payload = {
                 "appToken": agent.app_token or "",
                 "appKey": agent.app_key or "",
@@ -484,14 +493,19 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
                 "paramsJson": json.dumps({"tracking_number": tracking_number}, ensure_ascii=False)
             }
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+            # 🔹 调试打印
+            print("TXFBA 请求 URL:", agent.api_url)
+            print("请求 payload:", payload)
+            print("请求 headers:", headers)
+
             try:
-                r = requests.post(api_url, data=payload, headers=headers, timeout=timeout)
+                r = requests.post(agent.api_url, data=payload, headers=headers, timeout=timeout)
                 r.encoding = "utf-8"
                 try:
                     data = r.json()
                 except Exception:
                     data = {"raw_text": r.text}
-                # 如果返回 "appToken传递错误,客户不存在"等，附加提示
                 if isinstance(data, dict) and data.get("success") == "0" and "appToken" in (data.get("cnmessage") or ""):
                     data["hint"] = "疑似 appKey/appToken 或客户号配置错误，或该代理未开通 API 权限"
                 CACHE[cache_key] = (now, data)
@@ -501,14 +515,41 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
                 CACHE[cache_key] = (now, data)
                 return data
 
-        # 尝试用户名/密码
+        # ----------------
+        # RTB56 / 其他代理逻辑
+        # ----------------
+        if agent.app_key or agent.app_token:
+            try:
+                payload = {
+                    "appToken": agent.app_token or "",
+                    "appKey": agent.app_key or "",
+                    "serviceMethod": "gettrack",
+                    "paramsJson": json.dumps({"tracking_number": tracking_number}, ensure_ascii=False)
+                }
+                headers = {"Content-Type": "application/x-www-form-urlencoded"}
+                r = requests.post(agent.api_url, data=payload, headers=headers, timeout=timeout)
+                r.encoding = "utf-8"
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {"raw_text": r.text}
+                CACHE[cache_key] = (now, data)
+                return data
+            except Exception as e:
+                data = {"error": f"请求代理接口出错: {e}"}
+                CACHE[cache_key] = (now, data)
+                return data
+
+        # ----------------
+        # 用户名/密码方式
+        # ----------------
         try:
             payload = {
                 "username": agent.username or "",
                 "password": agent.password or "",
                 "tracking_number": tracking_number
             }
-            r = requests.post(api_url, data=payload, timeout=timeout)
+            r = requests.post(agent.api_url, data=payload, timeout=timeout)
             r.encoding = "utf-8"
             try:
                 data = r.json()
@@ -521,7 +562,9 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             CACHE[cache_key] = (now, data)
             return data
 
+    # ----------------
     # 使用环境 carrier
+    # ----------------
     carrier = CARRIERS.get(carrier_id) if carrier_id else CARRIERS.get(CARRIERS_LIST[0]) if CARRIERS_LIST else None
     if not carrier:
         data = {"error": "未配置可用的货代（env）"}
@@ -542,7 +585,6 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             data = r.json()
         except Exception:
             data = {"raw_text": r.text}
-        # 如失败，兜底返回手工轨迹
         if isinstance(data, dict) and data.get("success") == "0":
             local = local_manual()
             if local:

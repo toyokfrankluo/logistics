@@ -22,17 +22,21 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
 
     try:
         # ========================
-        # 1. YWTYGJ 接口 (rtb56)
+        # 1. YWTYGJ 接口 (rtb56) 和 txfba.com 接口
         # ========================
-        if "rtb56.com" in (agent.api_url or ""):
+        if "rtb56.com" in (agent.api_url or "") or "txfba.com" in (agent.api_url or ""):
             payload = {
                 "appToken": agent.app_token,
                 "appKey": agent.app_key,
                 "serviceMethod": "gettrack",
                 "paramsJson": json.dumps({"tracking_number": tracking_number})
             }
+            
+            print(f"🔄 发送POST请求到RTB56/txfba接口: {agent.api_url}")
+            print(f"📦 请求数据: {payload}")
+            
             resp = requests.post(agent.api_url, data=payload, timeout=15)
-            print("=== API 原始返回 (rtb56) ===", resp.text)
+            print("=== API 原始返回 (RTB56/txfba) ===", resp.text)
 
             if resp.status_code != 200:
                 return None, f"API返回错误 {resp.status_code}"
@@ -109,15 +113,21 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
             return tracks, None
 
         # ========================
-        # 3. 默认情况（兼容 GET 返回 JSON）
+        # 3. 默认情况（统一使用POST请求）
         # ========================
         else:
-            resp = requests.get(agent.api_url, params={
+            # 统一使用POST请求，支持更多接口
+            payload = {
                 "appKey": agent.app_key,
                 "appToken": agent.app_token,
                 "tracking_number": tracking_number
-            }, timeout=10)
-            print("=== API 原始返回 (default) ===", resp.text)
+            }
+            
+            print(f"🔄 发送默认POST请求到: {agent.api_url}")
+            print(f"📦 请求数据: {payload}")
+            
+            resp = requests.post(agent.api_url, data=payload, timeout=10)
+            print("=== API 原始返回 (default POST) ===", resp.text)
 
             if resp.status_code != 200:
                 return None, f"API返回错误 {resp.status_code}"
@@ -131,6 +141,9 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
                     return data["data"], None
                 if "result" in data and isinstance(data["result"], dict) and "list" in data["result"]:
                     return data["result"]["list"], None
+                # 添加对错误信息的处理
+                if "code" in data and data["code"] != 200:
+                    return None, data.get("message", "接口返回错误")
             return None, "未找到轨迹字段"
 
     except Exception as e:
