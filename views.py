@@ -1063,69 +1063,42 @@ def refresh_single_tracking(shipment_id):
 
 
 def simple_sync_tracking(shipment, tracks):
-    """智能写入轨迹到Supabase - 严格去重版本"""
+    """超级简化写入 - 避免内存溢出"""
     try:
         import requests
         import json
         import os
-        from datetime import datetime
         
+        # 直接从环境变量读取，避免复杂的导入
         supabase_url = os.environ.get('SUPABASE_URL')
         supabase_key = os.environ.get('SUPABASE_KEY')
         
         if not supabase_url or not supabase_key:
-            print("❌ Supabase配置缺失")
+            print("❌ Supabase配置缺失 - 请检查Render环境变量")
             return 0
         
         success_count = 0
-        duplicate_count = 0
         
-        print(f"📦 准备处理 {len(tracks)} 条轨迹")
+        # 只处理前3条最新轨迹，避免内存溢出
+        recent_tracks = tracks[:3]
         
-        # 严格去重：基于运单号+描述（完全忽略时间和位置，与数据库保持一致）
-        unique_tracks = {}
-        for track in tracks:
-            description = track.get('description', track.get('info', track.get('status', ''))).strip()
-            
-            # 创建唯一标识符（只基于运单号和描述，忽略时间和位置）
-            unique_key = f"{shipment.tracking_number}_{description}"
-            
-            if unique_key not in unique_tracks:
-                unique_tracks[unique_key] = track
-            else:
-                print(f"⏭️ 跳过重复轨迹: {description[:40]}...")
-                duplicate_count += 1
+        print(f"📦 简化写入 {len(recent_tracks)} 条轨迹")
         
-        print(f"🔍 严格去重后剩余 {len(unique_tracks)} 条唯一轨迹")
-        
-        # 写入Supabase
-        for track_key, track in unique_tracks.items():
+        for track in recent_tracks:
             try:
-                # 标准化时间格式
-                event_time = track.get('time', '')
-                if not event_time:
-                    event_time = datetime.utcnow().isoformat()
-                elif " " in event_time and "T" not in event_time:
-                    # 如果是 "2025-09-18 09:07:31" 格式，转换为ISO格式
-                    try:
-                        dt = datetime.strptime(event_time, "%Y-%m-%d %H:%M:%S")
-                        event_time = dt.isoformat()
-                    except:
-                        event_time = datetime.utcnow().isoformat()
-                
-                description = track.get('description', track.get('info', track.get('status', ''))).strip()
-                location = track.get('location', '').strip()
-                
+                # 超级简化的数据准备
+                description = track.get('description', track.get('info', track.get('status', '')))
+                if not description:
+                    continue
+                    
                 track_data = {
                     "tracking_number": shipment.tracking_number,
-                    "event_time": event_time,
-                    "location": location,
-                    "description": description
+                    "event_time": track.get('time', '2025-01-01T00:00:00Z'),
+                    "location": track.get('location', ''),
+                    "description": description[:200]  # 限制长度
                 }
                 
-                print(f"📝 写入: {description[:40]}...")
-                
-                # 尝试写入Supabase
+                # 直接写入，不检查重复
                 response = requests.post(
                     f"{supabase_url}/rest/v1/shipment_tracking_details",
                     headers={
@@ -1135,24 +1108,53 @@ def simple_sync_tracking(shipment, tracks):
                         "Prefer": "return=minimal"
                     },
                     data=json.dumps(track_data),
-                    timeout=10
+                    timeout=5
                 )
                 
-                if response.status_code in [200, 201, 204]:
+                if response.status_code in [200, 201, 204, 409]:
                     success_count += 1
-                    print(f"✅ 写入成功")
-                elif response.status_code == 409:
-                    duplicate_count += 1
-                    print(f"⏭️ 数据库层面跳过重复")
+                    print(f"✅ 写入成功: {description[:30]}...")
                 else:
                     print(f"⚠️ 写入异常: {response.status_code}")
                     
             except Exception as e:
-                print(f"❌ 写入失败: {str(e)}")
+                print(f"❌ 单条写入失败")
         
-        print(f"🎯 最终结果: 成功 {success_count} 条, 跳过 {duplicate_count} 条重复")
         return success_count
         
     except Exception as e:
-        print(f"💥 写入过程出错: {str(e)}")
+        print(f"💥 写入过程出错")
         return 0
+    
+# -------------------------------
+# 自动同步功能（需要手动触发或配置定时任务）
+# -------------------------------
+@views.route("/admin/auto-sync")
+@login_required
+def auto_sync_tracking():
+    """手动触发自动同步（可以配置为定时执行）"""
+    try:
+        # 只同步最近1天的运单
+        one_day_ago = datetime.utcnow() - timedelta(days=1)
+        shipments = Shipment.query.filter(
+            Shipment.agent_id.isnot(None),
+            Shipment.created_at >= one_day_ago
+        ).limit(10).all()  # 限制10个运单
+        
+        updated_count = 0
+        
+        for shipment in shipments:
+            agent = CarrierAgent.query.get(shipment.agent_id)
+            if agent and agent.supports_api:
+                tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                if tracks and not error:
+                    success_count = simple_sync_tracking(shipment, tracks)
+                    if success_count > 0:
+                        updated_count += 1
+        
+        flash(f"自动同步完成！更新 {updated_count} 个运单", "success")
+        
+    except Exception as e:
+        flash(f"自动同步失败: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
