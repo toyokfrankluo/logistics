@@ -1154,6 +1154,56 @@ def simple_sync_tracking(shipment, tracks):
 # 自动同步功能
 # -------------------------------
 
+def complete_sync_tracking(shipment, tracks):
+    """完整同步所有物流轨迹"""
+    try:
+        if not tracks:
+            return 0
+            
+        # 获取现有的轨迹时间戳，避免重复
+        existing_timestamps = set()
+        for existing_track in shipment.tracks:
+            existing_timestamps.add(existing_track.track_time.strftime('%Y-%m-%d %H:%M:%S'))
+        
+        added_count = 0
+        # 按时间顺序处理轨迹（从早到晚）
+        for track_data in sorted(tracks, key=lambda x: x.get('track_time')):
+            track_time = track_data.get('track_time')
+            track_description = track_data.get('track_description', '')
+            location = track_data.get('location', '')
+            
+            if not track_time:
+                continue
+                
+            # 检查是否已存在相同时间的轨迹
+            time_key = track_time.strftime('%Y-%m-%d %H:%M:%S')
+            if time_key in existing_timestamps:
+                continue
+                
+            # 创建新的轨迹记录
+            new_track = Track(
+                shipment_id=shipment.id,
+                track_time=track_time,
+                track_description=track_description,
+                location=location
+            )
+            
+            db.session.add(new_track)
+            added_count += 1
+            existing_timestamps.add(time_key)
+            
+        if added_count > 0:
+            db.session.commit()
+            print(f"✅ 添加了 {added_count} 条新轨迹")
+            
+        return added_count
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ 同步轨迹失败: {str(e)}")
+        return 0
+
+
 @views.route("/admin/auto-sync-single/<int:shipment_id>")
 @login_required
 def auto_sync_single(shipment_id):
@@ -1174,12 +1224,13 @@ def auto_sync_single(shipment_id):
         
         tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
         if tracks and not error:
-            success_count = simple_sync_tracking(shipment, tracks)
+            # 使用完整的轨迹同步函数
+            success_count = complete_sync_tracking(shipment, tracks)
             if success_count > 0:
-                flash(f"✅ 运单同步成功: {shipment.tracking_number}", "success")
+                flash(f"✅ 运单同步成功！添加了 {success_count} 条新轨迹", "success")
                 print(f"✅ 单个运单同步成功: {shipment.tracking_number}")
             else:
-                flash("没有新的轨迹信息", "info")
+                flash("没有发现新的轨迹信息", "info")
         else:
             flash(f"同步失败: {error}", "danger")
             
@@ -1191,6 +1242,115 @@ def auto_sync_single(shipment_id):
     return redirect(url_for("views.shipments"))
 
 
+@views.route("/admin/auto-sync-all-safe")
+@login_required
+def auto_sync_all_safe():
+    """安全版本的全量同步 - 极低内存占用"""
+    try:
+        # 使用流式处理，避免一次性加载所有数据
+        page = 1
+        page_size = 5  # 减少每批数量
+        total_updated = 0
+        total_processed = 0
+        max_process = 30  # 最大处理数量
+        
+        while total_processed < max_process:
+            # 使用分页查询，只获取必要字段
+            shipments_pagination = Shipment.query.filter(
+                Shipment.agent_id.isnot(None)
+            ).paginate(page=page, per_page=page_size, error_out=False)
+            
+            if not shipments_pagination.items:
+                break
+                
+            print(f"🔄 处理第 {page} 批运单，共 {len(shipments_pagination.items)} 个")
+            
+            for shipment in shipments_pagination.items:
+                try:
+                    if total_processed >= max_process:
+                        break
+                        
+                    total_processed += 1
+                    print(f"📦 处理进度: {total_processed}/{max_process} - {shipment.tracking_number}")
+                    
+                    # 极简内存监控
+                    try:
+                        import psutil
+                        memory_usage = psutil.virtual_memory().percent
+                        if memory_usage > 70:  # 更严格的内存限制
+                            print(f"⚠️ 内存使用较高 ({memory_usage}%)，提前结束")
+                            flash(f"内存使用较高，已安全同步 {total_updated}/{total_processed} 个运单", "warning")
+                            return redirect(url_for("views.shipments"))
+                    except ImportError:
+                        pass
+                    
+                    # 处理单个运单
+                    agent = CarrierAgent.query.get(shipment.agent_id)
+                    if agent and agent.supports_api:
+                        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                        if tracks and not error:
+                            success_count = complete_sync_tracking(shipment, tracks)
+                            if success_count > 0:
+                                total_updated += 1
+                                print(f"✅ 运单同步成功: {shipment.tracking_number}")
+                    
+                    # 立即释放内存
+                    import gc
+                    gc.collect()
+                    
+                    # 更长的延迟，减少服务器压力
+                    time.sleep(5)
+                    
+                except Exception as e:
+                    print(f"❌ 运单同步失败: {shipment.tracking_number} - {str(e)}")
+                    continue
+            
+            page += 1
+        
+        flash(f"安全同步完成！更新 {total_updated}/{total_processed} 个运单", "success")
+        
+    except Exception as e:
+        flash(f"同步过程出错: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
+
+
+@views.route("/admin/refresh-single-tracking-complete/<int:shipment_id>")
+@login_required
+def refresh_single_tracking_complete(shipment_id):
+    """完整刷新单个运单的所有轨迹"""
+    try:
+        shipment = Shipment.query.get_or_404(shipment_id)
+        
+        if not shipment.agent_id:
+            flash("该运单没有关联代理，无法刷新", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        agent = CarrierAgent.query.get(shipment.agent_id)
+        if not agent:
+            flash("找不到对应的代理", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        print(f"🔄 开始完整刷新运单轨迹: {shipment.tracking_number}")
+        
+        # 获取完整轨迹
+        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        if tracks and not error:
+            # 使用完整同步
+            success_count = complete_sync_tracking(shipment, tracks)
+            if success_count > 0:
+                flash(f"✅ 完整轨迹刷新成功！添加了 {success_count} 条轨迹", "success")
+            else:
+                flash("没有发现新的轨迹信息", "info")
+        else:
+            flash(f"刷新失败: {error}", "danger")
+            
+    except Exception as e:
+        flash(f"轨迹刷新失败: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
+
+
 @views.route("/admin/auto-sync-all")
 @login_required
 def auto_sync_all():
@@ -1198,7 +1358,7 @@ def auto_sync_all():
     try:
         # 分批处理，避免一次性加载所有数据
         page = 1
-        page_size = 20  # 每批处理20个
+        page_size = 10  # 减少每批数量
         total_updated = 0
         total_processed = 0
         
@@ -1224,7 +1384,7 @@ def auto_sync_all():
                         import psutil
                         memory_usage = psutil.virtual_memory().percent
                         
-                        if memory_usage > 85:
+                        if memory_usage > 80:  # 降低阈值
                             print(f"⚠️ 内存使用过高 ({memory_usage}%)，停止同步")
                             flash(f"内存使用过高，已同步 {total_updated}/{total_processed} 个运单", "warning")
                             return redirect(url_for("views.shipments"))
@@ -1236,20 +1396,19 @@ def auto_sync_all():
                     if agent and agent.supports_api:
                         tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
                         if tracks and not error:
-                            success_count = simple_sync_tracking(shipment, tracks)
+                            # 使用完整同步函数
+                            success_count = complete_sync_tracking(shipment, tracks)
                             if success_count > 0:
                                 total_updated += 1
                                 batch_updated += 1
                                 print(f"✅ 运单同步成功: {shipment.tracking_number}")
                     
                     # 增加延迟
-                    time.sleep(3)
+                    time.sleep(4)
                     
-                    # 定期垃圾回收
-                    if total_processed % 5 == 0:
-                        import gc
-                        gc.collect()
-                        print("🧹 强制垃圾回收完成")
+                    # 立即垃圾回收
+                    import gc
+                    gc.collect()
                         
                 except Exception as e:
                     print(f"❌ 运单同步失败: {shipment.tracking_number} - {str(e)}")
@@ -1259,8 +1418,8 @@ def auto_sync_all():
             page += 1
             
             # 限制总处理数量，防止无限循环
-            if total_processed >= 100:  # 最多处理100个
-                print("⚠️ 达到最大处理限制 (100个运单)")
+            if total_processed >= 50:  # 减少最大处理数量
+                print("⚠️ 达到最大处理限制 (50个运单)")
                 break
         
         flash(f"自动同步完成！更新 {total_updated}/{total_processed} 个运单", "success")
@@ -1281,7 +1440,7 @@ def auto_sync_recent():
         shipments = Shipment.query.filter(
             Shipment.agent_id.isnot(None),
             Shipment.created_at >= seven_days_ago
-        ).limit(10).all()  # 减少到10个
+        ).limit(8).all()  # 减少到8个
         
         updated_count = 0
         total_count = len(shipments)
@@ -1299,7 +1458,7 @@ def auto_sync_recent():
                         import psutil
                         memory_usage = psutil.virtual_memory().percent
                         
-                        if memory_usage > 85:  # 如果内存使用超过85%，停止处理
+                        if memory_usage > 80:  # 降低阈值
                             print(f"⚠️ 内存使用过高 ({memory_usage}%)，停止同步")
                             flash(f"内存使用过高，已同步 {updated_count}/{i-1} 个运单", "warning")
                             break
@@ -1309,19 +1468,18 @@ def auto_sync_recent():
                     
                     tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
                     if tracks and not error:
-                        success_count = simple_sync_tracking(shipment, tracks)
+                        # 使用完整同步函数
+                        success_count = complete_sync_tracking(shipment, tracks)
                         if success_count > 0:
                             updated_count += 1
                             print(f"✅ 最近运单同步成功: {shipment.tracking_number}")
                 
                 # 增加延迟，减少服务器压力
-                time.sleep(3)  # 增加到3秒
+                time.sleep(4)
                 
-                # 每处理3个运单后强制垃圾回收
-                if i % 3 == 0:
-                    import gc
-                    gc.collect()
-                    print("🧹 强制垃圾回收完成")
+                # 立即垃圾回收
+                import gc
+                gc.collect()
                 
             except Exception as e:
                 print(f"❌ 最近运单同步失败: {shipment.tracking_number} - {str(e)}")

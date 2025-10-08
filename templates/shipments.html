@@ -22,14 +22,19 @@
            onclick="return confirm('确定要刷新所有运单的物流轨迹吗？这可能需要一些时间。')">
             🔄 一键刷新所有物流轨迹
         </a>
+        <a href="{{ url_for('views.auto_sync_all_safe') }}" 
+           class="btn btn-success"
+           onclick="return confirm('确定要安全同步所有运单吗？这会安全地更新所有运单的完整轨迹。')">
+            🛡️ 安全同步所有运单
+        </a>
         <a href="{{ url_for('views.auto_sync_all') }}" 
            class="btn btn-success"
-           onclick="return confirm('确定要自动同步所有运单吗？这会更新所有运单的最新轨迹。')">
+           onclick="return confirm('确定要自动同步所有运单吗？这会更新所有运单的完整轨迹。')">
             🤖 自动同步所有运单
         </a>
         <a href="{{ url_for('views.auto_sync_recent') }}" 
            class="btn btn-info"
-           onclick="return confirm('确定要自动同步最近运单吗？这会更新最近7天的运单轨迹。')">
+           onclick="return confirm('确定要自动同步最近运单吗？这会更新最近7天的运单完整轨迹。')">
             ⚡ 自动同步最近运单
         </a>
     </div>
@@ -67,15 +72,15 @@
                     <!-- 同步单个运单按钮 -->
                     <a href="{{ url_for('views.auto_sync_single', shipment_id=shipment.id) }}" 
                        class="btn btn-sm btn-success mb-1"
-                       onclick="return confirm('确定要同步该运单的物流轨迹吗？')">
+                       onclick="return confirm('确定要同步该运单的完整物流轨迹吗？')">
                         🤖 同步运单
                     </a>
 
-                    <!-- 刷新轨迹按钮 -->
-                    <a href="{{ url_for('views.refresh_single_tracking', shipment_id=shipment.id) }}" 
+                    <!-- 完整刷新轨迹按钮 -->
+                    <a href="{{ url_for('views.refresh_single_tracking_complete', shipment_id=shipment.id) }}" 
                        class="btn btn-sm btn-info mb-1"
-                       onclick="return confirm('确定要刷新该运单的物流轨迹吗？')">
-                        🔄 刷新轨迹
+                       onclick="return confirm('确定要完整刷新该运单的所有物流轨迹吗？这将获取完整的物流历史。')">
+                        🔄 完整刷新轨迹
                     </a>
 
                     <!-- 编辑 -->
