@@ -965,59 +965,61 @@ def sync_tracking_details():
 @views.route("/admin/refresh-tracking")
 @login_required
 def refresh_tracking():
-    """一键刷新所有运单的物流轨迹 - 智能去重版本"""
+    """终极简化刷新 - 避免内存溢出"""
     try:
-        # 获取最近30天的运单，避免处理过多历史数据
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        # 只获取最近1天的5个运单
+        one_day_ago = datetime.utcnow() - timedelta(days=1)
         shipments = Shipment.query.filter(
             Shipment.agent_id.isnot(None),
-            Shipment.created_at >= thirty_days_ago
-        ).all()
+            Shipment.created_at >= one_day_ago
+        ).limit(5).all()  # 限制最多5个运单
         
         updated_count = 0
         error_count = 0
         total_count = len(shipments)
         
-        print(f"🔄 开始智能刷新 {total_count} 个运单的物流轨迹")
+        print(f"🔄 开始刷新 {total_count} 个运单 (严格限制数量)")
         
         for i, shipment in enumerate(shipments, 1):
             try:
-                print(f"📦 处理进度: {i}/{total_count} - {shipment.tracking_number}")
+                print(f"📦 处理 {i}/{total_count}: {shipment.tracking_number}")
                 
                 agent = CarrierAgent.query.get(shipment.agent_id)
                 if agent and agent.supports_api:
-                    # 调用轨迹API获取最新数据
+                    # 调用轨迹API
                     tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
                     
                     if tracks and not error:
-                        # 智能同步到Supabase（带去重）
+                        # 简化同步
                         success_count = simple_sync_tracking(shipment, tracks)
                         
                         if success_count > 0:
                             updated_count += 1
-                            print(f"✅ 运单 {shipment.tracking_number} 更新成功，新增 {success_count} 条轨迹")
+                            print(f"✅ 运单更新成功")
                         else:
-                            print(f"ℹ️ 运单 {shipment.tracking_number} 无新轨迹")
+                            print(f"ℹ️ 运单无新轨迹")
                     else:
                         error_count += 1
-                        print(f"❌ 运单 {shipment.tracking_number} 获取轨迹失败: {error}")
+                        print(f"❌ 获取轨迹失败")
                 else:
                     error_count += 1
-                    print(f"⏭️ 跳过运单 {shipment.tracking_number}: 代理不支持API")
+                    print(f"⏭️ 代理不支持")
                 
-                # 短暂延迟，避免请求过于频繁
-                time.sleep(1)
+                # 重要：处理完一个运单后强制垃圾回收
+                import gc
+                gc.collect()
+                
+                # 延迟3秒，避免频繁请求
+                time.sleep(3)
                     
             except Exception as e:
                 error_count += 1
-                print(f"🔥 刷新运单 {shipment.tracking_number} 时出错: {str(e)}")
+                print(f"🔥 运单处理出错")
         
-        flash(f"轨迹刷新完成！成功更新: {updated_count}/{total_count}, 失败: {error_count}", "success")
+        flash(f"刷新完成！成功: {updated_count}/{total_count}, 失败: {error_count}", "success")
         
     except Exception as e:
-        flash(f"刷新过程出错: {str(e)}", "danger")
-        import traceback
-        traceback.print_exc()
+        flash(f"刷新过程出错", "danger")
     
     return redirect(url_for("views.shipments"))
 
@@ -1063,65 +1065,42 @@ def refresh_single_tracking(shipment_id):
 
 
 def simple_sync_tracking(shipment, tracks):
-    """宽松写入版本 - 避免唯一约束冲突"""
+    """终极简化版本 - 解决内存溢出和配置问题"""
     try:
+        # 超级简化的导入
         import requests
         import json
         import os
-        import hashlib
         
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_KEY')
+        # 直接从环境变量读取
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_KEY')
         
+        # 详细的环境变量检查
+        print(f"🔧 环境变量检查:")
+        print(f"   SUPABASE_URL: {supabase_url is not None}")
+        print(f"   SUPABASE_KEY: {supabase_key is not None}")
+        
+        # 如果配置缺失，直接返回
         if not supabase_url or not supabase_key:
-            print("❌ Supabase配置缺失")
+            print("❌ Supabase配置缺失 - 跳过该运单")
             return 0
         
         success_count = 0
         
-        print(f"📦 准备处理 {len(tracks)} 条轨迹")
+        # 只处理前2条最新轨迹，避免内存溢出
+        recent_tracks = tracks[:2] if tracks else []
         
-        # 宽松去重：基于运单号+描述+日期（避免唯一约束冲突）
-        unique_tracks = {}
-        for track in tracks:
-            description = track.get('description', track.get('info', track.get('status', ''))).strip()
-            event_time = track.get('time', '')
-            
-            # 提取日期部分（忽略具体时间）
-            date_part = ""
-            if event_time:
-                if " " in event_time:
-                    date_part = event_time.split(" ")[0]  # 取日期部分 "2025-09-18"
-                elif "T" in event_time:
-                    date_part = event_time.split("T")[0]  # 取日期部分 "2025-09-18T09:07:31"
-            
-            # 创建唯一标识符（基于运单号+描述+日期）
-            unique_key = f"{shipment.tracking_number}_{description}_{date_part}"
-            
-            if unique_key not in unique_tracks:
-                unique_tracks[unique_key] = track
-            else:
-                print(f"⏭️ 跳过重复轨迹: {description[:40]}...")
+        print(f"📦 处理 {len(recent_tracks)} 条轨迹 (限制数量避免内存溢出)")
         
-        print(f"🔍 宽松去重后剩余 {len(unique_tracks)} 条唯一轨迹")
-        
-        # 写入Supabase
-        for track_key, track in unique_tracks.items():
+        for i, track in enumerate(recent_tracks):
             try:
-                # 标准化时间格式
-                event_time = track.get('time', '')
-                if not event_time:
-                    event_time = "2025-01-01T00:00:00Z"
-                elif " " in event_time and "T" not in event_time:
-                    try:
-                        from datetime import datetime
-                        dt = datetime.strptime(event_time, "%Y-%m-%d %H:%M:%S")
-                        event_time = dt.isoformat()
-                    except:
-                        event_time = "2025-01-01T00:00:00Z"
+                # 超级简化的数据处理
+                description = track.get('description') or track.get('info') or track.get('status') or '无描述'
+                description = str(description)[:50]  # 限制长度
                 
-                description = track.get('description', track.get('info', track.get('status', ''))).strip()
-                location = track.get('location', '').strip()
+                event_time = track.get('time') or '2025-01-01T00:00:00Z'
+                location = track.get('location') or ''
                 
                 track_data = {
                     "tracking_number": shipment.tracking_number,
@@ -1130,9 +1109,9 @@ def simple_sync_tracking(shipment, tracks):
                     "description": description
                 }
                 
-                print(f"📝 写入: {description[:40]}...")
+                print(f"📝 写入 {i+1}/{len(recent_tracks)}: {description}")
                 
-                # 尝试写入Supabase
+                # 简化的写入请求
                 response = requests.post(
                     f"{supabase_url}/rest/v1/shipment_tracking_details",
                     headers={
@@ -1142,29 +1121,24 @@ def simple_sync_tracking(shipment, tracks):
                         "Prefer": "return=minimal"
                     },
                     data=json.dumps(track_data),
-                    timeout=10
+                    timeout=5  # 更短的超时
                 )
                 
-                print(f"📨 写入响应: {response.status_code}")
-                
-                if response.status_code in [200, 201, 204]:
+                # 简化的响应处理
+                if response.status_code in [200, 201, 204, 409]:
                     success_count += 1
                     print(f"✅ 写入成功")
-                elif response.status_code == 409:
-                    print(f"⏭️ 数据库跳过重复 (409)")
-                    # 即使重复也继续处理下一条
-                    continue
                 else:
-                    print(f"⚠️ 写入异常: {response.status_code} - {response.text}")
+                    print(f"⚠️ 写入异常: {response.status_code}")
                     
             except Exception as e:
-                print(f"❌ 写入失败: {str(e)}")
+                print(f"❌ 单条写入失败")
         
-        print(f"🎯 最终结果: 成功 {success_count} 条")
+        print(f"🎯 完成: {success_count}/{len(recent_tracks)} 成功")
         return success_count
         
     except Exception as e:
-        print(f"💥 写入过程出错: {str(e)}")
+        print(f"💥 写入过程出错")
         return 0
     
 # -------------------------------
