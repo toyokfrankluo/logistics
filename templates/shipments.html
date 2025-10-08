@@ -64,6 +64,13 @@
                 <td>{{ "%.2f"|format(shipment.fee) if shipment.fee else "0.00" }}</td>
                 <td>{{ shipment.status }}</td>
                 <td>
+                    <!-- 同步单个运单按钮 -->
+                    <a href="{{ url_for('views.auto_sync_single', shipment_id=shipment.id) }}" 
+                       class="btn btn-sm btn-success mb-1"
+                       onclick="return confirm('确定要同步该运单的物流轨迹吗？')">
+                        🤖 同步运单
+                    </a>
+
                     <!-- 刷新轨迹按钮 -->
                     <a href="{{ url_for('views.refresh_single_tracking', shipment_id=shipment.id) }}" 
                        class="btn btn-sm btn-info mb-1"
