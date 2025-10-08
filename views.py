@@ -965,20 +965,23 @@ def sync_tracking_details():
 @views.route("/admin/refresh-tracking")
 @login_required
 def refresh_tracking():
-    """终极简化刷新 - 避免内存溢出"""
+    """严格内存防护的刷新函数"""
     try:
-        # 只获取最近1天的5个运单
+        import gc
+        import time
+        
+        # 内存防护：只获取最近1天的3个运单
         one_day_ago = datetime.utcnow() - timedelta(days=1)
         shipments = Shipment.query.filter(
             Shipment.agent_id.isnot(None),
             Shipment.created_at >= one_day_ago
-        ).limit(5).all()  # 限制最多5个运单
+        ).limit(3).all()  # 限制最多3个运单
         
         updated_count = 0
         error_count = 0
         total_count = len(shipments)
         
-        print(f"🔄 开始刷新 {total_count} 个运单 (严格限制数量)")
+        print(f"🔄 开始刷新 {total_count} 个运单 (严格内存防护)")
         
         for i, shipment in enumerate(shipments, 1):
             try:
@@ -1005,16 +1008,17 @@ def refresh_tracking():
                     error_count += 1
                     print(f"⏭️ 代理不支持")
                 
-                # 重要：处理完一个运单后强制垃圾回收
-                import gc
+                # 内存防护：处理完每个运单后强制清理
                 gc.collect()
                 
-                # 延迟3秒，避免频繁请求
-                time.sleep(3)
+                # 内存防护：增加延迟，避免频繁请求
+                if i < total_count:  # 最后一个不需要延迟
+                    time.sleep(5)  # 更长的延迟
                     
             except Exception as e:
                 error_count += 1
                 print(f"🔥 运单处理出错")
+                gc.collect()  # 出错时也清理内存
         
         flash(f"刷新完成！成功: {updated_count}/{total_count}, 失败: {error_count}", "success")
         
@@ -1065,43 +1069,42 @@ def refresh_single_tracking(shipment_id):
 
 
 def simple_sync_tracking(shipment, tracks):
-    """终极简化版本 - 解决内存溢出和配置问题"""
+    """修复环境变量+内存溢出防护"""
     try:
-        # 超级简化的导入
         import requests
         import json
         import os
+        import gc  # 添加垃圾回收
         
-        # 直接从环境变量读取
+        # 使用正确的环境变量名称
         supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_KEY')
+        supabase_key = os.getenv('SUPABASE_ANON_KEY')
         
-        # 详细的环境变量检查
         print(f"🔧 环境变量检查:")
         print(f"   SUPABASE_URL: {supabase_url is not None}")
-        print(f"   SUPABASE_KEY: {supabase_key is not None}")
+        print(f"   SUPABASE_ANON_KEY: {supabase_key is not None}")
         
-        # 如果配置缺失，直接返回
         if not supabase_url or not supabase_key:
             print("❌ Supabase配置缺失 - 跳过该运单")
             return 0
         
         success_count = 0
         
-        # 只处理前2条最新轨迹，避免内存溢出
-        recent_tracks = tracks[:2] if tracks else []
+        # 内存防护1：限制处理轨迹数量
+        recent_tracks = tracks[:1] if tracks else []  # 只处理1条，避免内存溢出
         
-        print(f"📦 处理 {len(recent_tracks)} 条轨迹 (限制数量避免内存溢出)")
+        print(f"📦 处理 {len(recent_tracks)} 条轨迹 (严格限制数量)")
         
         for i, track in enumerate(recent_tracks):
             try:
-                # 超级简化的数据处理
+                # 内存防护2：简化数据处理
                 description = track.get('description') or track.get('info') or track.get('status') or '无描述'
-                description = str(description)[:50]  # 限制长度
+                description = str(description)[:30]  # 更短的长度限制
                 
                 event_time = track.get('time') or '2025-01-01T00:00:00Z'
                 location = track.get('location') or ''
                 
+                # 内存防护3：简化数据结构
                 track_data = {
                     "tracking_number": shipment.tracking_number,
                     "event_time": event_time,
@@ -1111,7 +1114,7 @@ def simple_sync_tracking(shipment, tracks):
                 
                 print(f"📝 写入 {i+1}/{len(recent_tracks)}: {description}")
                 
-                # 简化的写入请求
+                # 内存防护4：使用更短的超时和简化的请求
                 response = requests.post(
                     f"{supabase_url}/rest/v1/shipment_tracking_details",
                     headers={
@@ -1121,18 +1124,24 @@ def simple_sync_tracking(shipment, tracks):
                         "Prefer": "return=minimal"
                     },
                     data=json.dumps(track_data),
-                    timeout=5  # 更短的超时
+                    timeout=3  # 更短的超时
                 )
                 
-                # 简化的响应处理
+                # 内存防护5：简化响应处理
                 if response.status_code in [200, 201, 204, 409]:
                     success_count += 1
                     print(f"✅ 写入成功")
                 else:
                     print(f"⚠️ 写入异常: {response.status_code}")
+                
+                # 内存防护6：立即清理临时变量
+                del track_data, description, event_time, location
                     
             except Exception as e:
                 print(f"❌ 单条写入失败")
+        
+        # 内存防护7：强制垃圾回收
+        gc.collect()
         
         print(f"🎯 完成: {success_count}/{len(recent_tracks)} 成功")
         return success_count
