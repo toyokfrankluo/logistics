@@ -22,6 +22,16 @@
            onclick="return confirm('确定要刷新所有运单的物流轨迹吗？这可能需要一些时间。')">
             🔄 一键刷新所有物流轨迹
         </a>
+        <a href="{{ url_for('views.auto_sync_all') }}" 
+           class="btn btn-success"
+           onclick="return confirm('确定要自动同步所有运单吗？这会更新所有运单的最新轨迹。')">
+            🤖 自动同步所有运单
+        </a>
+        <a href="{{ url_for('views.auto_sync_recent') }}" 
+           class="btn btn-info"
+           onclick="return confirm('确定要自动同步最近运单吗？这会更新最近7天的运单轨迹。')">
+            ⚡ 自动同步最近运单
+        </a>
     </div>
 
     <table class="table table-striped">

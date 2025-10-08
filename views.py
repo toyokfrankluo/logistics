@@ -1151,34 +1151,87 @@ def simple_sync_tracking(shipment, tracks):
         return 0
     
 # -------------------------------
-# 自动同步功能（需要手动触发或配置定时任务）
+# 自动同步功能
 # -------------------------------
-@views.route("/admin/auto-sync")
-@login_required
-def auto_sync_tracking():
-    """手动触发自动同步（可以配置为定时执行）"""
+@views.route("/admin/auto-sync-all")
+@login_required  
+def auto_sync_all():
+    """手动触发全量自动同步"""
     try:
-        # 只同步最近1天的运单
-        one_day_ago = datetime.utcnow() - timedelta(days=1)
-        shipments = Shipment.query.filter(
-            Shipment.agent_id.isnot(None),
-            Shipment.created_at >= one_day_ago
-        ).limit(10).all()  # 限制10个运单
+        # 同步所有有代理的运单
+        shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).limit(50).all()  # 限制50个避免内存溢出
         
         updated_count = 0
+        total_count = len(shipments)
         
-        for shipment in shipments:
-            agent = CarrierAgent.query.get(shipment.agent_id)
-            if agent and agent.supports_api:
-                tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
-                if tracks and not error:
-                    success_count = simple_sync_tracking(shipment, tracks)
-                    if success_count > 0:
-                        updated_count += 1
+        print(f"🔄 开始全量自动同步 {total_count} 个运单")
         
-        flash(f"自动同步完成！更新 {updated_count} 个运单", "success")
+        for i, shipment in enumerate(shipments, 1):
+            try:
+                print(f"📦 同步进度: {i}/{total_count} - {shipment.tracking_number}")
+                
+                agent = CarrierAgent.query.get(shipment.agent_id)
+                if agent and agent.supports_api:
+                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    if tracks and not error:
+                        success_count = simple_sync_tracking(shipment, tracks)
+                        if success_count > 0:
+                            updated_count += 1
+                            print(f"✅ 自动同步成功: {shipment.tracking_number}")
+                
+                # 避免请求过于频繁
+                time.sleep(2)
+                
+            except Exception as e:
+                print(f"❌ 自动同步失败: {shipment.tracking_number} - {str(e)}")
+        
+        flash(f"全量自动同步完成！更新 {updated_count}/{total_count} 个运单", "success")
         
     except Exception as e:
-        flash(f"自动同步失败: {str(e)}", "danger")
+        flash(f"全量自动同步失败: {str(e)}", "danger")
+    
+    return redirect(url_for("views.shipments"))
+
+
+@views.route("/admin/auto-sync-recent")
+@login_required
+def auto_sync_recent():
+    """手动触发最近运单同步"""
+    try:
+        # 同步最近7天的运单
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        shipments = Shipment.query.filter(
+            Shipment.agent_id.isnot(None),
+            Shipment.created_at >= seven_days_ago
+        ).limit(20).all()  # 限制20个
+        
+        updated_count = 0
+        total_count = len(shipments)
+        
+        print(f"🔄 开始同步最近 {total_count} 个运单")
+        
+        for i, shipment in enumerate(shipments, 1):
+            try:
+                print(f"📦 同步进度: {i}/{total_count} - {shipment.tracking_number}")
+                
+                agent = CarrierAgent.query.get(shipment.agent_id)
+                if agent and agent.supports_api:
+                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    if tracks and not error:
+                        success_count = simple_sync_tracking(shipment, tracks)
+                        if success_count > 0:
+                            updated_count += 1
+                            print(f"✅ 最近运单同步成功: {shipment.tracking_number}")
+                
+                # 避免请求过于频繁
+                time.sleep(2)
+                
+            except Exception as e:
+                print(f"❌ 最近运单同步失败: {shipment.tracking_number}")
+        
+        flash(f"最近运单同步完成！更新 {updated_count}/{total_count} 个运单", "success")
+        
+    except Exception as e:
+        flash(f"最近运单同步失败: {str(e)}", "danger")
     
     return redirect(url_for("views.shipments"))
