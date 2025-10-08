@@ -957,3 +957,97 @@ def sync_tracking_details():
         flash(f"轨迹同步过程出错: {str(e)}", "danger")
     
     return redirect(url_for("views.shipments"))
+
+# -------------------------------
+# 一键刷新物流轨迹
+# -------------------------------
+@views.route("/admin/refresh-tracking")
+@login_required
+def refresh_tracking():
+    """一键刷新所有运单的物流轨迹"""
+    try:
+        # 获取所有有代理的运单
+        shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).all()
+        updated_count = 0
+        error_count = 0
+        
+        print(f"🔄 开始刷新 {len(shipments)} 个运单的物流轨迹")
+        
+        for shipment in shipments:
+            try:
+                agent = CarrierAgent.query.get(shipment.agent_id)
+                if agent and agent.supports_api:
+                    print(f"📦 刷新运单: {shipment.tracking_number}")
+                    
+                    # 调用轨迹API获取最新数据
+                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    
+                    if tracks and not error:
+                        # 同步到Supabase
+                        success_count, fail_count = sync_tracking_to_supabase(shipment, tracks)
+                        
+                        if success_count > 0:
+                            updated_count += 1
+                            print(f"✅ 运单 {shipment.tracking_number} 更新成功，新增 {success_count} 条轨迹")
+                        else:
+                            error_count += 1
+                            print(f"⚠️ 运单 {shipment.tracking_number} 无新轨迹")
+                    else:
+                        error_count += 1
+                        print(f"❌ 运单 {shipment.tracking_number} 获取轨迹失败: {error}")
+                else:
+                    error_count += 1
+                    print(f"⏭️ 跳过运单 {shipment.tracking_number}: 代理不支持API")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"🔥 刷新运单 {shipment.tracking_number} 时出错: {str(e)}")
+        
+        flash(f"轨迹刷新完成！成功更新: {updated_count}, 失败: {error_count}", "success")
+        
+    except Exception as e:
+        flash(f"刷新过程出错: {str(e)}", "danger")
+        import traceback
+        traceback.print_exc()
+    
+    return redirect(url_for("views.shipments"))
+
+
+@views.route("/shipments/<int:shipment_id>/refresh")
+@login_required
+def refresh_single_tracking(shipment_id):
+    """刷新单个运单的物流轨迹"""
+    try:
+        shipment = Shipment.query.get_or_404(shipment_id)
+        
+        if not shipment.agent_id:
+            flash("该运单没有配置物流代理", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        agent = CarrierAgent.query.get(shipment.agent_id)
+        if not agent or not agent.supports_api:
+            flash("该运单的代理不支持API抓取", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        print(f"🔄 刷新单个运单: {shipment.tracking_number}")
+        
+        # 调用轨迹API获取最新数据
+        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        
+        if tracks and not error:
+            # 同步到Supabase
+            success_count, fail_count = sync_tracking_to_supabase(shipment, tracks)
+            
+            if success_count > 0:
+                flash(f"运单 {shipment.tracking_number} 更新成功，新增 {success_count} 条轨迹", "success")
+            else:
+                flash(f"运单 {shipment.tracking_number} 暂无新轨迹", "info")
+        else:
+            flash(f"获取运单 {shipment.tracking_number} 轨迹失败: {error}", "danger")
+            
+    except Exception as e:
+        flash(f"刷新过程出错: {str(e)}", "danger")
+        import traceback
+        traceback.print_exc()
+    
+    return redirect(url_for("views.shipments"))

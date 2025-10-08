@@ -14,7 +14,15 @@
         </form>
     </div>
 
-    <a href="{{ url_for('views.add_shipment') }}" class="btn btn-primary mb-3">新增运单</a>
+    <!-- 操作按钮区域 -->
+    <div class="mb-3">
+        <a href="{{ url_for('views.add_shipment') }}" class="btn btn-primary">新增运单</a>
+        <a href="{{ url_for('views.refresh_tracking') }}" 
+           class="btn btn-warning"
+           onclick="return confirm('确定要刷新所有运单的物流轨迹吗？这可能需要一些时间。')">
+            🔄 一键刷新所有物流轨迹
+        </a>
+    </div>
 
     <table class="table table-striped">
         <thead>
@@ -46,20 +54,27 @@
                 <td>{{ "%.2f"|format(shipment.fee) if shipment.fee else "0.00" }}</td>
                 <td>{{ shipment.status }}</td>
                 <td>
+                    <!-- 刷新轨迹按钮 -->
+                    <a href="{{ url_for('views.refresh_single_tracking', shipment_id=shipment.id) }}" 
+                       class="btn btn-sm btn-info mb-1"
+                       onclick="return confirm('确定要刷新该运单的物流轨迹吗？')">
+                        🔄 刷新轨迹
+                    </a>
+
                     <!-- 编辑 -->
                     <a href="{{ url_for('views.edit_shipment', shipment_id=shipment.id) }}" 
-                       class="btn btn-sm btn-warning">编辑</a>
+                       class="btn btn-sm btn-warning mb-1">编辑</a>
 
                     <!-- 删除 -->
                     <form method="POST" action="{{ url_for('views.delete_shipment', shipment_id=shipment.id) }}" 
                           style="display:inline;">
-                        <button type="submit" class="btn btn-sm btn-danger" 
+                        <button type="submit" class="btn btn-sm btn-danger mb-1" 
                                 onclick="return confirm('确定删除该运单吗？')">删除</button>
                     </form>
 
                     <!-- 手工轨迹 -->
                     <a href="{{ url_for('views.manual_tracks', shipment_id=shipment.id) }}" 
-                       class="btn btn-sm btn-info">手工轨迹</a>
+                       class="btn btn-sm btn-secondary mb-1">手工轨迹</a>
                 </td>
             </tr>
             {% else %}
