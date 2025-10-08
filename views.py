@@ -1155,19 +1155,26 @@ def simple_sync_tracking(shipment, tracks):
 # -------------------------------
 
 def complete_sync_tracking(shipment, tracks):
-    """完整同步所有物流轨迹"""
+    """完整同步所有物流轨迹 - 修复版本"""
     try:
         if not tracks:
             return 0
             
+        print(f"📝 开始处理 {len(tracks)} 条轨迹数据")
+        
         # 获取现有的轨迹时间戳，避免重复
         existing_timestamps = set()
         for existing_track in shipment.tracks:
-            existing_timestamps.add(existing_track.track_time.strftime('%Y-%m-%d %H:%M:%S'))
+            # 使用完整的时间戳格式进行比较
+            time_key = existing_track.track_time.strftime('%Y-%m-%d %H:%M:%S')
+            existing_timestamps.add(time_key)
+            print(f"🕒 现有轨迹: {time_key} - {existing_track.track_description}")
         
         added_count = 0
         # 按时间顺序处理轨迹（从早到晚）
-        for track_data in sorted(tracks, key=lambda x: x.get('track_time')):
+        sorted_tracks = sorted(tracks, key=lambda x: x.get('track_time'))
+        
+        for track_data in sorted_tracks:
             track_time = track_data.get('track_time')
             track_description = track_data.get('track_description', '')
             location = track_data.get('location', '')
@@ -1175,11 +1182,16 @@ def complete_sync_tracking(shipment, tracks):
             if not track_time:
                 continue
                 
-            # 检查是否已存在相同时间的轨迹
+            # 标准化时间格式进行比较
             time_key = track_time.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 检查是否已存在相同时间的轨迹
             if time_key in existing_timestamps:
+                print(f"⏭️ 跳过已存在轨迹: {time_key}")
                 continue
                 
+            print(f"➕ 添加新轨迹: {time_key} - {track_description}")
+            
             # 创建新的轨迹记录
             new_track = Track(
                 shipment_id=shipment.id,
@@ -1194,20 +1206,73 @@ def complete_sync_tracking(shipment, tracks):
             
         if added_count > 0:
             db.session.commit()
-            print(f"✅ 添加了 {added_count} 条新轨迹")
+            print(f"✅ 成功添加了 {added_count} 条新轨迹到数据库")
+        else:
+            print("ℹ️ 没有发现新的轨迹需要添加")
             
         return added_count
         
     except Exception as e:
         db.session.rollback()
         print(f"❌ 同步轨迹失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return 0
+
+
+@views.route("/admin/refresh-full-history/<int:shipment_id>")
+@login_required
+def refresh_full_history(shipment_id):
+    """强制刷新完整历史轨迹 - 解决历史数据缺失问题"""
+    try:
+        shipment = Shipment.query.get_or_404(shipment_id)
+        
+        if not shipment.agent_id:
+            flash("该运单没有关联代理，无法刷新", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        agent = CarrierAgent.query.get(shipment.agent_id)
+        if not agent:
+            flash("找不到对应的代理", "warning")
+            return redirect(url_for("views.shipments"))
+        
+        print(f"🔄 开始强制刷新完整历史轨迹: {shipment.tracking_number}")
+        
+        # 获取完整轨迹数据
+        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        if tracks:
+            print(f"📦 从API获取到 {len(tracks)} 条轨迹")
+            
+            # 显示所有获取到的轨迹
+            for i, track in enumerate(tracks):
+                time_str = track.get('track_time').strftime('%Y-%m-%d %H:%M:%S') if track.get('track_time') else '未知时间'
+                print(f"  {i+1}. {time_str} - {track.get('location', '')} - {track.get('track_description', '')}")
+            
+            # 使用完整同步函数
+            success_count = complete_sync_tracking(shipment, tracks)
+            if success_count > 0:
+                flash(f"✅ 完整历史轨迹刷新成功！添加了 {success_count} 条轨迹", "success")
+                print(f"✅ 完整历史轨迹刷新成功: {shipment.tracking_number}")
+            else:
+                flash("没有发现新的轨迹信息", "info")
+        else:
+            flash(f"获取轨迹失败: {error}", "danger")
+            print(f"❌ 获取轨迹失败: {error}")
+            
+    except Exception as e:
+        error_msg = f"刷新完整历史失败: {str(e)}"
+        flash(error_msg, "danger")
+        print(f"❌ {error_msg}")
+        import traceback
+        traceback.print_exc()
+    
+    return redirect(url_for("views.shipments"))
 
 
 @views.route("/admin/auto-sync-single/<int:shipment_id>")
 @login_required
 def auto_sync_single(shipment_id):
-    """同步单个运单"""
+    """同步单个运单 - 使用完整同步"""
     try:
         shipment = Shipment.query.get_or_404(shipment_id)
         
@@ -1224,20 +1289,25 @@ def auto_sync_single(shipment_id):
         
         tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
         if tracks and not error:
+            print(f"📦 获取到 {len(tracks)} 条轨迹数据")
+            
             # 使用完整的轨迹同步函数
             success_count = complete_sync_tracking(shipment, tracks)
             if success_count > 0:
-                flash(f"✅ 运单同步成功！添加了 {success_count} 条新轨迹", "success")
+                flash(f"✅ 运单同步成功！添加了 {success_count} 条轨迹", "success")
                 print(f"✅ 单个运单同步成功: {shipment.tracking_number}")
             else:
                 flash("没有发现新的轨迹信息", "info")
         else:
             flash(f"同步失败: {error}", "danger")
+            print(f"❌ 同步失败: {error}")
             
     except Exception as e:
         error_msg = f"运单同步失败: {str(e)}"
         flash(error_msg, "danger")
         print(f"❌ {error_msg}")
+        import traceback
+        traceback.print_exc()
     
     return redirect(url_for("views.shipments"))
 
@@ -1311,42 +1381,6 @@ def auto_sync_all_safe():
         
     except Exception as e:
         flash(f"同步过程出错: {str(e)}", "danger")
-    
-    return redirect(url_for("views.shipments"))
-
-
-@views.route("/admin/refresh-single-tracking-complete/<int:shipment_id>")
-@login_required
-def refresh_single_tracking_complete(shipment_id):
-    """完整刷新单个运单的所有轨迹"""
-    try:
-        shipment = Shipment.query.get_or_404(shipment_id)
-        
-        if not shipment.agent_id:
-            flash("该运单没有关联代理，无法刷新", "warning")
-            return redirect(url_for("views.shipments"))
-        
-        agent = CarrierAgent.query.get(shipment.agent_id)
-        if not agent:
-            flash("找不到对应的代理", "warning")
-            return redirect(url_for("views.shipments"))
-        
-        print(f"🔄 开始完整刷新运单轨迹: {shipment.tracking_number}")
-        
-        # 获取完整轨迹
-        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
-        if tracks and not error:
-            # 使用完整同步
-            success_count = complete_sync_tracking(shipment, tracks)
-            if success_count > 0:
-                flash(f"✅ 完整轨迹刷新成功！添加了 {success_count} 条轨迹", "success")
-            else:
-                flash("没有发现新的轨迹信息", "info")
-        else:
-            flash(f"刷新失败: {error}", "danger")
-            
-    except Exception as e:
-        flash(f"轨迹刷新失败: {str(e)}", "danger")
     
     return redirect(url_for("views.shipments"))
 

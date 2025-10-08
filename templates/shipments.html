@@ -76,11 +76,18 @@
                         🤖 同步运单
                     </a>
 
-                    <!-- 完整刷新轨迹按钮 -->
-                    <a href="{{ url_for('views.refresh_single_tracking_complete', shipment_id=shipment.id) }}" 
+                    <!-- 强制刷新完整历史按钮 -->
+                    <a href="{{ url_for('views.refresh_full_history', shipment_id=shipment.id) }}" 
                        class="btn btn-sm btn-info mb-1"
-                       onclick="return confirm('确定要完整刷新该运单的所有物流轨迹吗？这将获取完整的物流历史。')">
-                        🔄 完整刷新轨迹
+                       onclick="return confirm('确定要强制刷新完整历史轨迹吗？这将获取并保存所有历史物流数据，包括之前缺失的轨迹。')">
+                        📜 刷新完整历史
+                    </a>
+
+                    <!-- 刷新轨迹按钮 -->
+                    <a href="{{ url_for('views.refresh_single_tracking', shipment_id=shipment.id) }}" 
+                       class="btn btn-sm btn-warning mb-1"
+                       onclick="return confirm('确定要刷新该运单的物流轨迹吗？')">
+                        🔄 刷新轨迹
                     </a>
 
                     <!-- 编辑 -->
