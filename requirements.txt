@@ -34,3 +34,4 @@ urllib3==2.5.0
 Werkzeug==3.0.3
 WTForms==3.2.1
 psycopg2-binary
+schedule
