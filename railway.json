@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install --upgrade pip && pip install --force-reinstall --no-cache-dir -r requirements.txt"
+  },
+  "deploy": {
+    "startCommand": "python app.py",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
