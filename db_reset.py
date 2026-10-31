@@ -47,8 +47,10 @@ with app.app_context():
     # 默认 admin
     if User:
         if User.query.count() == 0:
-            admin_name = os.getenv("ADMIN_USER", "admin")
-            admin_pass = os.getenv("ADMIN_PASS", "123456")
+            admin_name = os.getenv("ADMIN_USER")
+            admin_pass = os.getenv("ADMIN_PASS")
+            if not admin_name or not admin_pass:
+                raise RuntimeError("必须显式配置 ADMIN_USER 和 ADMIN_PASS")
             u = User(username=admin_name, is_admin=True)
             if hasattr(u, "set_password"):
                 u.set_password(admin_pass)
@@ -61,7 +63,7 @@ with app.app_context():
                         u.password = admin_pass
             db.session.add(u)
             db.session.commit()
-            print(f"已创建管理员账号: {admin_name} / {admin_pass}")
+            print("数据库管理操作：不记录连接信息或管理员凭据")
         else:
             print("已有用户存在，跳过创建 admin。")
     else:

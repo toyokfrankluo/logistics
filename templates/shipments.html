@@ -60,7 +60,7 @@
             <tr>
                 <td>{{ shipment.id }}</td>
                 <td>{{ shipment.tracking_number }}</td>
-                <td>{{ shipment.agent_tracking_number if shipment.agent_tracking_number else '' }}</td>
+                <td>{{ shipment.shipment_id if shipment.shipment_id else '' }}</td>
                 <td>{{ shipment.third_party_tracking_number if shipment.third_party_tracking_number else '' }}</td>
                 <td>{{ shipment.customer.name if shipment.customer else '' }}</td>
                 <td>{{ shipment.agent.name if shipment.agent else '' }}</td>

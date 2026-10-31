@@ -42,14 +42,20 @@ from models import db, Customer, CarrierAgent, Shipment, ManualTrack, BankAccoun
 # ------------------------------
 # 基本应用与配置
 # ------------------------------
-load_dotenv()
+ISOLATED_MODE = os.getenv("LOGISTICS_ISOLATED") == "1"
+if not ISOLATED_MODE:
+    load_dotenv()
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
-app.secret_key = os.getenv("FLASK_SECRET", "change-this-secret-for-dev")
+import secrets
+app.secret_key = os.getenv("FLASK_SECRET") or secrets.token_hex(32)
+if ISOLATED_MODE:
+    from isolated_runtime import configure
+    configure(app)
 
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
@@ -58,7 +64,8 @@ app.register_blueprint(views)
 
 app.config["JSON_AS_ASCII"] = False
 app.config["TEMPLATES_AUTO_RELOAD"] = True
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///logistics.db")
+if not ISOLATED_MODE:
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///logistics.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
@@ -69,7 +76,9 @@ login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
 # 管理后台
-admin = Admin(app, name="后台管理", template_mode="bootstrap4")
+from access_control import SecureAdminIndexView, SecureModelView
+admin = Admin(app, name="后台管理", template_mode="bootstrap4",
+              index_view=SecureAdminIndexView())
 
 # 环境配置
 DEFAULT_API_URL = os.getenv("API_URL", "http://ywsl.rtb56.com/webservice/PublicService.asmx/ServiceInterfaceUTF8")
@@ -125,12 +134,12 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.password_hash, raw)
 
 # Admin
-admin.add_view(ModelView(User, db.session))
-admin.add_view(ModelView(Customer, db.session))
-admin.add_view(ModelView(CarrierAgent, db.session))
-admin.add_view(ModelView(Shipment, db.session))
-admin.add_view(ModelView(ManualTrack, db.session))
-admin.add_view(ModelView(BankAccount, db.session))
+admin.add_view(SecureModelView(User, db.session))
+admin.add_view(SecureModelView(Customer, db.session))
+admin.add_view(SecureModelView(CarrierAgent, db.session))
+admin.add_view(SecureModelView(Shipment, db.session))
+admin.add_view(SecureModelView(ManualTrack, db.session))
+admin.add_view(SecureModelView(BankAccount, db.session))
 
 # ------------------------------
 # 登录回调
@@ -435,9 +444,7 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
     if not shipment:
         return {"error": f"未找到运单号: {tracking_number}"}
 
-    shipment_id_to_use = shipment.agent_tracking_number
-    if not shipment_id_to_use:
-        return {"error": f"未找到对应的 shipment_id（agent_tracking_number）: {tracking_number}"}
+    shipment_id_to_use = shipment.shipment_id
 
     # ------------------------------
     # 使用 DB agent
@@ -459,6 +466,8 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
         # ----------------
         is_nextsls = "nextsls" in (agent.api_url or "").lower() or "sls" in (agent.api_url or "").lower()
         if is_nextsls:
+            if not shipment_id_to_use:
+                return {"error": "未配置代理系统单号"}
             payload = {
                 "shipment": {
                     "shipment_id": shipment_id_to_use,
@@ -467,10 +476,10 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             }
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {agent.app_token or API_TOKEN}"
+                "Authorization": f"Bearer {agent.app_token or ""}"
             }
             try:
-                r = requests.post(agent.api_url or API_URL, json=payload, headers=headers, timeout=timeout)
+                r = requests.post(agent.api_url, json=payload, headers=headers, timeout=timeout)
                 r.encoding = "utf-8"
                 data = r.json()
                 if data.get("status") != 1:
@@ -496,8 +505,8 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
 
             # 🔹 调试打印
             print("TXFBA 请求 URL:", agent.api_url)
-            print("请求 payload:", payload)
-            print("请求 headers:", headers)
+            print("物流操作完成或失败；详细数据不写入日志")
+            print("物流操作完成或失败；详细数据不写入日志")
 
             try:
                 r = requests.post(agent.api_url, data=payload, headers=headers, timeout=timeout)
@@ -561,6 +570,10 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             data = {"error": f"请求代理接口出错: {e}"}
             CACHE[cache_key] = (now, data)
             return data
+
+    manual = local_manual()
+    if manual:
+        return manual
 
     # ----------------
     # 使用环境 carrier
@@ -942,29 +955,20 @@ def import_shipments():
 def edit_shipment(sid):
     s = Shipment.query.get_or_404(sid)
     if request.method == "POST":
-        # 更新新字段
-        s.agent_tracking_number = request.form.get("agent_tracking_number", s.agent_tracking_number)
-        s.third_party_tracking_number = request.form.get("third_party_tracking_number", s.third_party_tracking_number)
-        
-        for f in ["destination", "channel", "product_type", "note", "status", "origin"]:
-            setattr(s, f, request.form.get(f, getattr(s, f)))
-        s.customer_id = int(request.form.get("customer_id")) if request.form.get("customer_id") else s.customer_id
-        s.agent_id = int(request.form.get("agent_id")) if request.form.get("agent_id") else s.agent_id
-        s.pieces = int(request.form.get("pieces", s.pieces) or s.pieces)
-        s.weight = float(request.form.get("weight", s.weight) or s.weight)
-        s.unit_price = float(request.form.get("unit_price", s.unit_price) or s.unit_price)
-        s.surcharge_extra = float(request.form.get("surcharge_extra", s.surcharge_extra) or s.surcharge_extra)
-        s.operation_fee = float(request.form.get("operation_fee", s.operation_fee) or s.operation_fee)
-        s.high_value_fee = float(request.form.get("high_value_fee", s.high_value_fee) or s.high_value_fee)
-        manual_fee = request.form.get("fee")
-        s.fee = _calc_fee(s.weight, s.unit_price, s.surcharge_extra, s.operation_fee, s.high_value_fee, manual_fee)
+        from shipment_updates import update_shipment
+        try:
+            update_shipment(s, request.form, allow_manual_fee=True)
+        except (ValueError, TypeError):
+            db.session.rollback()
+            flash("运单号重复、为空或数字格式无效")
+            return redirect(url_for("edit_shipment", sid=sid))
         db.session.commit()
         flash("运单已更新")
         return redirect(url_for("shipments"))
     return render_template_string("""
     <h3>编辑运单 {{s.tracking_number}}</h3>
     <form method="post">
-      代理系统单号 <input name="agent_tracking_number" value="{{s.agent_tracking_number or ''}}"><br>
+      代理系统单号 <input name="shipment_id" value="{{s.shipment_id or ''}}"><br>
       17Track单号 <input name="third_party_tracking_number" value="{{s.third_party_tracking_number or ''}}"><br>
       目的地 <input name="destination" value="{{s.destination or ''}}"><br>
       渠道 <input name="channel" value="{{s.channel or ''}}"><br>
@@ -1144,12 +1148,7 @@ from datetime import datetime
 from flask import request, redirect, url_for, flash, render_template_string, jsonify
 from flask_login import login_required, current_user
 
-# 注意：utils.py 如果存在 call_gettrack 等，需确保导入正确
-# 假设 utils.py 有这些函数
-try:
-    from utils import call_gettrack, format_tracks_from_data
-except ImportError:
-    pass  # 如果没有，忽略或定义
+# Keep the real tracking implementation above; do not import utility placeholders.
 
 # ------------------------------
 # 手工轨迹
@@ -1229,7 +1228,7 @@ def track():
 
         for n in numbers:
             shipment = Shipment.query.filter_by(tracking_number=n).first()
-            if shipment and shipment.agent_tracking_number:
+            if shipment and shipment.shipment_id:
                 data = call_gettrack(None, n, agent_id=agent_id or shipment.agent_id)
             else:
                 data = {"error": f"未找到对应的 shipment_id（agent_tracking_number）: {n}"}
@@ -1294,7 +1293,7 @@ def public_track_page():
       <div style="white-space:pre-wrap">
         {% for no, r in results.items() %}
           <h4>{{no}}</h4>
-          {% if r.tracks %}{{r.tracks}}{% else %}无轨迹{% endif %}
+          {% if r.error %}{{r.error}}{% elif r.tracks %}{{r.tracks}}{% else %}无轨迹{% endif %}
           <hr>
         {% endfor %}
       </div>
@@ -1396,13 +1395,16 @@ def invoice():
 def ensure_admin_user():
     try:
         if User.query.count() == 0:
-            admin_name = os.getenv("ADMIN_USER", "admin")
-            admin_pass = os.getenv("ADMIN_PASS", "123456")
+            admin_name = os.getenv("ADMIN_USER")
+            admin_pass = os.getenv("ADMIN_PASS")
+            if not admin_name or not admin_pass:
+                app.logger.warning("未配置管理员凭据，跳过创建用户")
+                return
             u = User(username=admin_name, is_admin=True)
             u.set_password(admin_pass)
             db.session.add(u)
             db.session.commit()
-            app.logger.info(f"已创建默认管理员账号：{admin_name} / {admin_pass}（请部署后修改）")
+            app.logger.info("已创建管理员账号")
     except Exception:
         app.logger.exception("创建默认管理员失败")
 
@@ -1414,7 +1416,7 @@ if __name__ == "__main__":
         db.create_all()
         ensure_sqlite_columns()  # 移除 try-except，让错误冒泡以便调试
         ensure_admin_user()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
 
 flask_app = app
 application = app

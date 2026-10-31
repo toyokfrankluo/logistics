@@ -53,8 +53,8 @@
                 <td>{{ agent.id }}</td>
                 <td>{{ agent.name }}</td>
                 <td>{{ agent.api_url }}</td>
-                <td>{{ agent.app_key }}</td>
-                <td>{{ agent.app_token }}</td>
+                <td>{{ "已配置" if agent.app_key else "未配置" }}</td>
+                <td>{{ "已配置" if agent.app_token else "未配置" }}</td>
                 <td>{{ agent.customer_code }}</td>
                 <td>
                     <a href="{{ url_for('views.edit_agent', agent_id=agent.id) }}" class="btn btn-sm btn-warning">编辑</a>

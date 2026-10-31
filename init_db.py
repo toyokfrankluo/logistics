@@ -6,7 +6,7 @@ from app import app, db, User, Shipment
 def init_database():
     """初始化数据库表结构"""
     print("🚀 开始初始化数据库...")
-    print(f"📊 数据库URL: {app.config['SQLALCHEMY_DATABASE_URI']}")
+    print("数据库管理操作：不记录连接信息或管理员凭据")
     
     with app.app_context():
         try:
@@ -39,13 +39,15 @@ def init_database():
             # 创建默认管理员用户
             print("👤 检查默认用户...")
             if User.query.count() == 0:
-                admin_name = os.getenv("ADMIN_USER", "admin")
-                admin_pass = os.getenv("ADMIN_PASS", "123456")
+                admin_name = os.getenv("ADMIN_USER")
+                admin_pass = os.getenv("ADMIN_PASS")
+                if not admin_name or not admin_pass:
+                    raise RuntimeError("必须显式配置 ADMIN_USER 和 ADMIN_PASS")
                 u = User(username=admin_name, is_admin=True)
                 u.set_password(admin_pass)
                 db.session.add(u)
                 db.session.commit()
-                print(f"✅ 已创建默认管理员：{admin_name}/{admin_pass}")
+                print("数据库管理操作：不记录连接信息或管理员凭据")
             else:
                 print("ℹ️ 用户已存在，跳过创建")
                 

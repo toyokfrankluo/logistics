@@ -1,3 +1,4 @@
+from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
@@ -8,7 +9,7 @@ import math
 # Excel 导出
 # =========================
 def export_invoice(company_info, customer_name, orders, bank_accounts,
-                   filename="账单.xlsx", date_from=None, date_to=None):
+                   filename=None, date_from=None, date_to=None):
     """
     导出账单 Excel（xlsx）。
     company_info: dict 或 str。如果是 dict，尝试读取 key "公司名称" 和 "地址"；
@@ -17,7 +18,7 @@ def export_invoice(company_info, customer_name, orders, bank_accounts,
     orders: 列表，每项为 dict，包含 keys: date, order_no, service_no, qty, type,
            weight, destination, channel, fee (float), summary
     bank_accounts: BankAccount ORM 对象列表（或元素含 bank_name, account_name, account_no 属性/键）
-    filename: 保存文件名（返回值也是此路径）
+    filename: 默认返回独立 BytesIO；显式传路径时才保存文件并返回路径
     date_from/date_to: 账单导出的日期范围
     """
 
@@ -178,6 +179,11 @@ def export_invoice(company_info, customer_name, orders, bank_accounts,
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
+    if filename is None:
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
     wb.save(filename)
     return filename
 
@@ -192,15 +198,8 @@ def call_gettrack(carrier_id, tracking_number, agent_id=None):
     轨迹查询统一接口（占位实现）。
     这里可以接第三方物流 API，也可以返回本地假数据。
     """
-    # 你以后可以改成调用真实 API
-    return {
-        "tracking_number": tracking_number,
-        "tracks": [
-            {"time": "2025-09-10 10:00", "status": "包裹已揽收"},
-            {"time": "2025-09-11 15:00", "status": "运输中"},
-            {"time": "2025-09-12 09:30", "status": "派送中"},
-        ]
-    }
+    return {"error": "此旧查询入口已停用，请使用应用追踪接口"}
+
 
 def format_tracks_from_data(data):
     """
