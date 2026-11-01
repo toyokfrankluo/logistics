@@ -7,7 +7,9 @@ NUMBER_KINDS = {'rtb56': 'customer', 'txfba': 'customer',
 
 def plan_attempt(source, shipment):
     reason = None
-    if not source.active:
+    if any(type(v) is not bool for v in (source.active, source.supports_api, source.verified)):
+        reason = 'invalid_source_flags'
+    elif not source.active:
         reason = 'inactive_source'
     elif not source.supports_api:
         reason = 'api_disabled'

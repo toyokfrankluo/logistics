@@ -659,6 +659,13 @@ def finance():
 @views.route("/track", methods=["GET", "POST"])
 @login_required
 def track():
+    if request.method == "POST":
+        from tracking_integration import simulated_track
+        simulated = simulated_track()
+        if simulated is not None:
+            results, message = simulated
+            return render_template("track.html", agents=[], customers=[], carriers={},
+                                   results=results, message=message, default_text="", public_mode=False)
     agents = CarrierAgent.query.filter_by(is_active=True).all()
     customers = Customer.query.all()
     carriers = {str(a.id): {"name": a.name} for a in agents}

@@ -91,7 +91,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(o.status, Status.SUCCESS)
         self.assertEqual(o.selected.events[0].status.value, 'unknown')
         self.assertIn('supplier_protocol_not_verified', o.selected.pending_confirmation)
-    def test_empty(self): self.assertEqual(self.run_query(response([])).status, Status.EMPTY)
+    def test_empty(self):
+        o = self.run_query(response([]))
+        self.assertEqual(o.status, Status.SUCCESS)
+        self.assertEqual(o.sources[0].status, Status.EMPTY)
     def test_timeout(self): self.assertEqual(self.run_query(TimeoutError('secret')).error, 'timeout')
     def test_http(self): self.assertEqual(self.run_query(Response(503, '{}')).error, 'http')
     def test_json(self): self.assertEqual(self.run_query(Response(200, 'bad-json')).error, 'invalid_json')
@@ -125,7 +128,7 @@ class ServiceTests(unittest.TestCase):
     def test_public_empty_does_not_fallback(self):
         s = replace(self.shipment, third_party=Source('third:fake', '17track', 'third_party', True))
         t = FakeResponses(Response(200, '{"status":200,"data":[{"track":[]}]}'))
-        self.assertEqual(query_tracking(self.plan(s, 'public'), t).status, Status.EMPTY)
+        self.assertEqual(query_tracking(self.plan(s, 'public'), t).status, Status.SUCCESS)
         self.assertEqual(len(t.calls), 1)
     def test_unverified_not_promoted_or_retried(self):
         from tracking.types import QueryResult, QueryStatus

@@ -3,6 +3,16 @@ from .service_types import LegacyPresentation, Status
 
 
 def present_legacy(outcome, contract):
+    if ((outcome.status == Status.SUCCESS and not outcome.selected and not outcome.manual)
+            or (outcome.status == Status.EMPTY and outcome.selected and outcome.selected.events)
+            or (outcome.status == Status.SUCCESS and outcome.selected
+                and outcome.selected.status.value == 'empty' and not outcome.manual)
+            or outcome.status == Status.NOT_REQUESTED
+            or (outcome.selected and outcome.selected.status.value not in {'success', 'empty'})
+            or (outcome.status in {Status.SUCCESS, Status.EMPTY} and outcome.error)
+            or (outcome.status == Status.EMPTY and outcome.manual)
+            or (outcome.status in {Status.ERROR, Status.BLOCKED} and outcome.selected)):
+        return LegacyPresentation(False, incompatibilities=('inconsistent_outcome',))
     if contract not in {'public_json', 'public_html', 'backend'}:
         return LegacyPresentation(False, incompatibilities=('unsupported_contract_or_raw_envelope',))
     if outcome.status == Status.UNVERIFIED:

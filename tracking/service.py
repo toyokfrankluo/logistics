@@ -23,6 +23,9 @@ def resolve_query(request, repository):
         shipment = matches[0] if matches else None
     if shipment is None:
         return QueryPlan(request.audience, None, blocked_reason='not_found')
+    if ((request.local_id is not None and shipment.local_id != request.local_id)
+            or (request.customer_number is not None and shipment.customer_number != request.customer_number)):
+        return QueryPlan(request.audience, None, blocked_reason='identity_mismatch')
     sources = []
     if not request.local_only:
         if request.audience == 'public' and shipment.third_party_number and shipment.third_party:
@@ -46,6 +49,25 @@ def query_tracking(plan, response_provider):
     number = shipment.customer_number if shipment else None
     if plan.blocked_reason:
         return QueryOutcome(Status.BLOCKED, number, manual, error=plan.blocked_reason)
+    # Rebuild the canonical plan from the trusted snapshot, then compare every attempt.
+    class SnapshotRepository:
+        def by_id(self, key): return shipment
+    from .service_types import QueryRequest
+    if shipment is None or type(plan.local_only) is not bool:
+        return QueryOutcome(Status.BLOCKED, number, error='invalid_plan')
+    canonical = resolve_query(QueryRequest(plan.audience, local_id=shipment.local_id,
+                                           local_only=plan.local_only), SnapshotRepository())
+    if canonical.blocked_reason:
+        return QueryOutcome(Status.BLOCKED, number, manual, error=canonical.blocked_reason)
+    if plan.attempts != canonical.attempts:
+        reason = 'invalid_plan'
+        if len(plan.attempts) == len(canonical.attempts) == 1:
+            a, b = plan.attempts[0], canonical.attempts[0]
+            if a.source == b.source and a.number != b.number:
+                reason = 'query_number_mismatch'
+            elif a.source == b.source and b.blocked_reason:
+                reason = b.blocked_reason
+        return QueryOutcome(Status.BLOCKED, number, manual, error=reason)
     if plan.local_only or not plan.attempts:
         return QueryOutcome(Status.SUCCESS if manual else Status.EMPTY, number, manual,
                             (SourceOutcome('external', Status.NOT_REQUESTED),))
@@ -75,7 +97,8 @@ def query_tracking(plan, response_provider):
             outcomes.append(SourceOutcome(attempt.source.source_id, Status.ERROR, error='transport_or_adapter'))
         last = outcomes[-1]
         if last.status in {Status.SUCCESS, Status.EMPTY, Status.UNVERIFIED}:
-            return QueryOutcome(last.status, number, manual, tuple(outcomes), last.result)
+            return QueryOutcome(Status.SUCCESS if last.status == Status.EMPTY and manual else last.status,
+                                number, manual, tuple(outcomes), last.result)
         # Public third-party failure -> associated agent, as in the old route.
         # Backend has only one source. No fallback on empty or unverified.
     last = outcomes[-1]
