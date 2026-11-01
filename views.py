@@ -14,7 +14,7 @@ views = Blueprint("views", __name__)
 # -------------------------------
 # API 轨迹获取函数
 # -------------------------------
-def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, selected_shipment=None):
+def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, selected_shipment=None, safe_errors=False):
     """
     根据不同的代理调用不同 API
     """
@@ -38,7 +38,7 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, select
                 "paramsJson": json.dumps({"tracking_number": tracking_number})
             }
             
-            print(f"🔄 发送POST请求到RTB56/txfba接口: {agent.api_url}")
+            print("tracking:request")
             print("物流操作完成或失败；详细数据不写入日志")
             
             resp = requests.post(agent.api_url, data=payload, timeout=15)
@@ -50,7 +50,7 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, select
             data = resp.json()
             if not data.get("success"):
                 # 返回的 message 在 cnmessage/enmessage
-                return None, data.get("cnmessage") or data.get("enmessage") or "接口调用失败"
+                return None, "tracking:business_error" if safe_errors else (data.get("cnmessage") or data.get("enmessage") or "接口调用失败")
 
             # 轨迹在 data[0]["details"]
             tracks = []
@@ -104,7 +104,7 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, select
 
             data = resp.json()
             if data.get("status") != 1:
-                return None, data.get("info", "接口调用失败")
+                return None, "tracking:business_error" if safe_errors else data.get("info", "接口调用失败")
 
             traces = data.get("data", {}).get("shipment", {}).get("traces", [])
             tracks = []
@@ -130,7 +130,7 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, select
                 "tracking_number": tracking_number
             }
             
-            print(f"🔄 发送默认POST请求到: {agent.api_url}")
+            print("tracking:request")
             print("物流操作完成或失败；详细数据不写入日志")
             
             resp = requests.post(agent.api_url, data=payload, timeout=10)
@@ -150,15 +150,17 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, select
                     return data["result"]["list"], None
                 # 添加对错误信息的处理
                 if "code" in data and data["code"] != 200:
-                    return None, data.get("message", "接口返回错误")
+                    return None, "tracking:business_error" if safe_errors else data.get("message", "接口返回错误")
             return None, "未找到轨迹字段"
 
     except Exception as e:
-        return None, f"API请求失败: {str(e)}"
+        return None, "tracking:request_failed" if safe_errors else f"API请求失败: {str(e)}"
 
 
 # =============== 新增：去重同步函数 ===============
 def sync_tracking_to_supabase(shipment, tracks):
+    if not _sync_identity_safe(shipment):
+        return 0, 1
     """
     同步轨迹数据到Supabase，避免重复数据
     """
@@ -236,6 +238,27 @@ def sync_tracking_to_supabase(shipment, tracks):
     except Exception as e:
         print("物流操作完成或失败；详细数据不写入日志")
         return 0, 1
+
+
+def _sync_identity_safe(shipment):
+    """Legacy cloud schema only identifies a shipment by customer number."""
+    if shipment.agent and not shipment.agent.is_active:
+        return False
+    return Shipment.query.filter_by(tracking_number=shipment.tracking_number).count() == 1
+
+
+def _refresh_query(shipment, agent, *, history=False):
+    if not agent or not agent.is_active or not agent.supports_api:
+        return None, "refresh:inactive_or_unavailable_agent"
+    if agent.id != shipment.agent_id or not _sync_identity_safe(shipment):
+        return None, "refresh:ambiguous_identity"
+    if history:
+        return None, "refresh:history_mapping_unavailable"
+    try:
+        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number, selected_shipment=shipment, safe_errors=True)
+        return (None, "refresh:supplier_failure") if error else (tracks, None)
+    except Exception:
+        return None, "refresh:query_failure"
 
 
 # -------------------------------
@@ -421,7 +444,7 @@ def add_shipment():
                     print("物流操作状态已记录（不包含业务数据）")
                     
                     # 调用您的轨迹API获取函数
-                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    tracks, error = _refresh_query(shipment, agent)
                     
                     if tracks and not error:
                         print(f"✅ 获取到 {len(tracks)} 条轨迹信息")
@@ -866,6 +889,9 @@ def sync_to_supabase():
         
         for shipment in shipments:
             try:
+                if not _sync_identity_safe(shipment):
+                    error_count += 1
+                    continue
                 # 获取客户名称
                 customer_name = "未知客户"
                 if shipment.customer_id:
@@ -897,19 +923,19 @@ def sync_to_supabase():
                 
                 if response.status_code in [200, 201, 204]:
                     success_count += 1
-                    print("物流操作状态已记录（不包含业务数据）")
+                    print("refresh:operation_status")
                 else:
                     error_count += 1
-                    print("物流操作完成或失败；详细数据不写入日志")
+                    print("refresh:operation_status")
                     
             except Exception as e:
                 error_count += 1
-                print("物流操作完成或失败；详细数据不写入日志")
+                print("refresh:operation_status")
         
         flash(f"基本运单同步完成！成功: {success_count}, 失败: {error_count}", "success")
         
     except Exception as e:
-        flash(f"同步过程出错: {str(e)}", "danger")
+        flash("refresh:operation_failed", "danger")
     
     return redirect(url_for("views.shipments"))
 
@@ -924,49 +950,49 @@ def sync_tracking_details():
         supabase_url = os.environ.get('SUPABASE_URL') or 'https://qxfzltryagnyiderbljf.supabase.co'
         supabase_key = os.environ.get('SUPABASE_KEY')
         
-        print(f"🔄 开始同步轨迹信息（优化去重版）")
+        print("refresh:operation_status")
         
         # 获取所有有代理的运单
         shipments = Shipment.query.filter(Shipment.agent_id.isnot(None)).all()
         total_success = 0
         total_error = 0
         
-        print(f"📦 找到 {len(shipments)} 个需要同步的运单")
+        print("refresh:operation_status")
         
         for shipment in shipments:
             try:
                 agent = CarrierAgent.query.get(shipment.agent_id)
                 if agent and agent.supports_api:
-                    print("物流操作状态已记录（不包含业务数据）")
+                    print("refresh:operation_status")
                     
                     # 调用轨迹API
-                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    tracks, error = _refresh_query(shipment, agent)
                     
-                    print(f"📊 API返回: {len(tracks) if tracks else 0} 条轨迹, 错误: {error}")
+                    print("refresh:operation_status")
                     
                     if tracks and not error:
                         # 使用优化后的同步函数
                         success_count, error_count = sync_tracking_to_supabase(shipment, tracks)
                         total_success += success_count
                         total_error += error_count
-                        print("物流操作状态已记录（不包含业务数据）")
+                        print("refresh:operation_status")
                     else:
-                        print(f"⚠️ 无法获取轨迹: {error}")
+                        print("refresh:operation_status")
                         total_error += 1
                 else:
-                    print("物流操作状态已记录（不包含业务数据）")
+                    print("refresh:operation_status")
                     total_error += 1
                         
             except Exception as e:
                 total_error += 1
-                print("物流操作完成或失败；详细数据不写入日志")
+                print("refresh:operation_status")
         
-        print(f"🎯 同步完成: 成功 {total_success}, 失败 {total_error}")
+        print("refresh:operation_status")
         flash(f"轨迹同步完成！成功: {total_success}, 失败: {total_error}", "success")
         
     except Exception as e:
-        print("物流操作完成或失败；详细数据不写入日志")
-        flash(f"轨迹同步过程出错: {str(e)}", "danger")
+        print("refresh:operation_status")
+        flash("refresh:operation_failed", "danger")
     
     return redirect(url_for("views.shipments"))
 
@@ -992,16 +1018,16 @@ def refresh_tracking():
         error_count = 0
         total_count = len(shipments)
         
-        print(f"🔄 开始刷新 {total_count} 个运单 (严格内存防护)")
+        print("refresh:operation_status")
         
         for i, shipment in enumerate(shipments, 1):
             try:
-                print("物流操作状态已记录（不包含业务数据）")
+                print("refresh:operation_status")
                 
                 agent = CarrierAgent.query.get(shipment.agent_id)
                 if agent and agent.supports_api:
                     # 调用轨迹API
-                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    tracks, error = _refresh_query(shipment, agent)
                     
                     if tracks and not error:
                         # 简化同步
@@ -1009,15 +1035,15 @@ def refresh_tracking():
                         
                         if success_count > 0:
                             updated_count += 1
-                            print(f"✅ 运单更新成功")
+                            print("refresh:operation_status")
                         else:
-                            print(f"ℹ️ 运单无新轨迹")
+                            print("refresh:operation_status")
                     else:
                         error_count += 1
-                        print(f"❌ 获取轨迹失败")
+                        print("refresh:operation_status")
                 else:
                     error_count += 1
-                    print(f"⏭️ 代理不支持")
+                    print("refresh:operation_status")
                 
                 # 内存防护：处理完每个运单后强制清理
                 gc.collect()
@@ -1028,7 +1054,7 @@ def refresh_tracking():
                     
             except Exception as e:
                 error_count += 1
-                print(f"🔥 运单处理出错")
+                print("refresh:operation_status")
                 gc.collect()  # 出错时也清理内存
         
         flash(f"刷新完成！成功: {updated_count}/{total_count}, 失败: {error_count}", "success")
@@ -1055,10 +1081,10 @@ def refresh_single_tracking(shipment_id):
             flash("该运单的代理不支持API抓取", "warning")
             return redirect(url_for("views.shipments"))
         
-        print("物流操作状态已记录（不包含业务数据）")
+        print("refresh:operation_status")
         
         # 调用轨迹API获取最新数据
-        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        tracks, error = _refresh_query(shipment, agent)
         
         if tracks and not error:
             # 同步到Supabase
@@ -1072,14 +1098,16 @@ def refresh_single_tracking(shipment_id):
             flash(f"获取运单 {shipment.tracking_number} 轨迹失败: {error}", "danger")
             
     except Exception as e:
-        flash(f"刷新过程出错: {str(e)}", "danger")
+        flash("refresh:operation_failed", "danger")
         import traceback
-        print("操作失败；详细业务数据不写入日志")
+        print("refresh:operation_status")
     
     return redirect(url_for("views.shipments"))
 
 
 def simple_sync_tracking(shipment, tracks):
+    if not _sync_identity_safe(shipment):
+        return 0
     """修复环境变量+内存溢出防护"""
     try:
         import requests
@@ -1166,69 +1194,9 @@ def simple_sync_tracking(shipment, tracks):
 # -------------------------------
 
 def complete_sync_tracking(shipment, tracks):
-    """完整同步所有物流轨迹 - 修复版本"""
-    try:
-        if not tracks:
-            return 0
-            
-        print(f"📝 开始处理 {len(tracks)} 条轨迹数据")
-        
-        # 获取现有的轨迹时间戳，避免重复
-        existing_timestamps = set()
-        for existing_track in shipment.tracks:
-            # 使用完整的时间戳格式进行比较
-            time_key = existing_track.track_time.strftime('%Y-%m-%d %H:%M:%S')
-            existing_timestamps.add(time_key)
-            print("物流操作完成或失败；详细数据不写入日志")
-        
-        added_count = 0
-        # 按时间顺序处理轨迹（从早到晚）
-        sorted_tracks = sorted(tracks, key=lambda x: x.get('track_time'))
-        
-        for track_data in sorted_tracks:
-            track_time = track_data.get('track_time')
-            track_description = track_data.get('track_description', '')
-            location = track_data.get('location', '')
-            
-            if not track_time:
-                continue
-                
-            # 标准化时间格式进行比较
-            time_key = track_time.strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 检查是否已存在相同时间的轨迹
-            if time_key in existing_timestamps:
-                print(f"⏭️ 跳过已存在轨迹: {time_key}")
-                continue
-                
-            print("物流操作完成或失败；详细数据不写入日志")
-            
-            # 创建新的轨迹记录
-            new_track = Track(
-                shipment_id=shipment.id,
-                track_time=track_time,
-                track_description=track_description,
-                location=location
-            )
-            
-            db.session.add(new_track)
-            added_count += 1
-            existing_timestamps.add(time_key)
-            
-        if added_count > 0:
-            db.session.commit()
-            print(f"✅ 成功添加了 {added_count} 条新轨迹到数据库")
-        else:
-            print("ℹ️ 没有发现新的轨迹需要添加")
-            
-        return added_count
-        
-    except Exception as e:
-        db.session.rollback()
-        print("物流操作完成或失败；详细数据不写入日志")
-        import traceback
-        print("操作失败；详细业务数据不写入日志")
-        return 0
+    # No automatic Track model exists. Do not invent a persistence mapping.
+    print("sync:history_mapping_unavailable")
+    return 0
 
 
 @views.route("/admin/refresh-full-history/<int:shipment_id>")
@@ -1247,35 +1215,35 @@ def refresh_full_history(shipment_id):
             flash("找不到对应的代理", "warning")
             return redirect(url_for("views.shipments"))
         
-        print("物流操作状态已记录（不包含业务数据）")
+        print("refresh:operation_status")
         
         # 获取完整轨迹数据
-        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        tracks, error = _refresh_query(shipment, agent, history=True)
         if tracks:
-            print(f"📦 从API获取到 {len(tracks)} 条轨迹")
+            print("refresh:operation_status")
             
             # 显示所有获取到的轨迹
             for i, track in enumerate(tracks):
                 time_str = track.get('track_time').strftime('%Y-%m-%d %H:%M:%S') if track.get('track_time') else '未知时间'
-                print("物流操作完成或失败；详细数据不写入日志")
+                print("refresh:operation_status")
             
             # 使用完整同步函数
             success_count = complete_sync_tracking(shipment, tracks)
             if success_count > 0:
                 flash(f"✅ 完整历史轨迹刷新成功！添加了 {success_count} 条轨迹", "success")
-                print("物流操作状态已记录（不包含业务数据）")
+                print("refresh:operation_status")
             else:
                 flash("没有发现新的轨迹信息", "info")
         else:
             flash(f"获取轨迹失败: {error}", "danger")
-            print(f"❌ 获取轨迹失败: {error}")
+            print("refresh:operation_status")
             
     except Exception as e:
-        error_msg = f"刷新完整历史失败: {str(e)}"
+        error_msg = "refresh:operation_failed"
         flash(error_msg, "danger")
-        print("物流操作完成或失败；详细数据不写入日志")
+        print("refresh:operation_status")
         import traceback
-        print("操作失败；详细业务数据不写入日志")
+        print("refresh:operation_status")
     
     return redirect(url_for("views.shipments"))
 
@@ -1296,29 +1264,29 @@ def auto_sync_single(shipment_id):
             flash("该代理不支持API同步", "warning")
             return redirect(url_for("views.shipments"))
         
-        print("物流操作状态已记录（不包含业务数据）")
+        print("refresh:operation_status")
         
-        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+        tracks, error = _refresh_query(shipment, agent, history=True)
         if tracks and not error:
-            print(f"📦 获取到 {len(tracks)} 条轨迹数据")
+            print("refresh:operation_status")
             
             # 使用完整的轨迹同步函数
             success_count = complete_sync_tracking(shipment, tracks)
             if success_count > 0:
                 flash(f"✅ 运单同步成功！添加了 {success_count} 条轨迹", "success")
-                print("物流操作状态已记录（不包含业务数据）")
+                print("refresh:operation_status")
             else:
                 flash("没有发现新的轨迹信息", "info")
         else:
             flash(f"同步失败: {error}", "danger")
-            print(f"❌ 同步失败: {error}")
+            print("refresh:operation_status")
             
     except Exception as e:
-        error_msg = f"运单同步失败: {str(e)}"
+        error_msg = "refresh:operation_failed"
         flash(error_msg, "danger")
-        print("物流操作完成或失败；详细数据不写入日志")
+        print("refresh:operation_status")
         import traceback
-        print("操作失败；详细业务数据不写入日志")
+        print("refresh:operation_status")
     
     return redirect(url_for("views.shipments"))
 
@@ -1344,7 +1312,7 @@ def auto_sync_all_safe():
             if not shipments_pagination.items:
                 break
                 
-            print(f"🔄 处理第 {page} 批运单，共 {len(shipments_pagination.items)} 个")
+            print("refresh:operation_status")
             
             for shipment in shipments_pagination.items:
                 try:
@@ -1352,14 +1320,14 @@ def auto_sync_all_safe():
                         break
                         
                     total_processed += 1
-                    print("物流操作状态已记录（不包含业务数据）")
+                    print("refresh:operation_status")
                     
                     # 极简内存监控
                     try:
                         import psutil
                         memory_usage = psutil.virtual_memory().percent
                         if memory_usage > 70:  # 更严格的内存限制
-                            print(f"⚠️ 内存使用较高 ({memory_usage}%)，提前结束")
+                            print("refresh:operation_status")
                             flash(f"内存使用较高，已安全同步 {total_updated}/{total_processed} 个运单", "warning")
                             return redirect(url_for("views.shipments"))
                     except ImportError:
@@ -1368,12 +1336,12 @@ def auto_sync_all_safe():
                     # 处理单个运单
                     agent = CarrierAgent.query.get(shipment.agent_id)
                     if agent and agent.supports_api:
-                        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                        tracks, error = _refresh_query(shipment, agent, history=True)
                         if tracks and not error:
                             success_count = complete_sync_tracking(shipment, tracks)
                             if success_count > 0:
                                 total_updated += 1
-                                print("物流操作状态已记录（不包含业务数据）")
+                                print("refresh:operation_status")
                     
                     # 立即释放内存
                     import gc
@@ -1383,7 +1351,7 @@ def auto_sync_all_safe():
                     time.sleep(5)
                     
                 except Exception as e:
-                    print("物流操作完成或失败；详细数据不写入日志")
+                    print("refresh:operation_status")
                     continue
             
             page += 1
@@ -1391,7 +1359,7 @@ def auto_sync_all_safe():
         flash(f"安全同步完成！更新 {total_updated}/{total_processed} 个运单", "success")
         
     except Exception as e:
-        flash(f"同步过程出错: {str(e)}", "danger")
+        flash("refresh:operation_failed", "danger")
     
     return redirect(url_for("views.shipments"))
 
@@ -1416,13 +1384,13 @@ def auto_sync_all():
             if not shipments.items:
                 break
                 
-            print(f"🔄 处理第 {page} 批运单，共 {len(shipments.items)} 个")
+            print("refresh:operation_status")
             
             batch_updated = 0
             for i, shipment in enumerate(shipments.items, 1):
                 try:
                     total_processed += 1
-                    print("物流操作状态已记录（不包含业务数据）")
+                    print("refresh:operation_status")
                     
                     # 内存监控
                     try:
@@ -1430,7 +1398,7 @@ def auto_sync_all():
                         memory_usage = psutil.virtual_memory().percent
                         
                         if memory_usage > 80:  # 降低阈值
-                            print(f"⚠️ 内存使用过高 ({memory_usage}%)，停止同步")
+                            print("refresh:operation_status")
                             flash(f"内存使用过高，已同步 {total_updated}/{total_processed} 个运单", "warning")
                             return redirect(url_for("views.shipments"))
                     except ImportError:
@@ -1439,14 +1407,14 @@ def auto_sync_all():
                     
                     agent = CarrierAgent.query.get(shipment.agent_id)
                     if agent and agent.supports_api:
-                        tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                        tracks, error = _refresh_query(shipment, agent, history=True)
                         if tracks and not error:
                             # 使用完整同步函数
                             success_count = complete_sync_tracking(shipment, tracks)
                             if success_count > 0:
                                 total_updated += 1
                                 batch_updated += 1
-                                print("物流操作状态已记录（不包含业务数据）")
+                                print("refresh:operation_status")
                     
                     # 增加延迟
                     time.sleep(4)
@@ -1456,21 +1424,21 @@ def auto_sync_all():
                     gc.collect()
                         
                 except Exception as e:
-                    print("物流操作完成或失败；详细数据不写入日志")
+                    print("refresh:operation_status")
                     continue
             
-            print(f"✅ 第 {page} 批完成，更新了 {batch_updated} 个运单")
+            print("refresh:operation_status")
             page += 1
             
             # 限制总处理数量，防止无限循环
             if total_processed >= 50:  # 减少最大处理数量
-                print("⚠️ 达到最大处理限制 (50个运单)")
+                print("refresh:operation_status")
                 break
         
         flash(f"自动同步完成！更新 {total_updated}/{total_processed} 个运单", "success")
         
     except Exception as e:
-        flash(f"自动同步失败: {str(e)}", "danger")
+        flash("refresh:operation_failed", "danger")
     
     return redirect(url_for("views.shipments"))
 
@@ -1490,11 +1458,11 @@ def auto_sync_recent():
         updated_count = 0
         total_count = len(shipments)
         
-        print(f"🔄 开始同步最近 {total_count} 个运单")
+        print("refresh:operation_status")
         
         for i, shipment in enumerate(shipments, 1):
             try:
-                print("物流操作状态已记录（不包含业务数据）")
+                print("refresh:operation_status")
                 
                 agent = CarrierAgent.query.get(shipment.agent_id)
                 if agent and agent.supports_api:
@@ -1504,20 +1472,20 @@ def auto_sync_recent():
                         memory_usage = psutil.virtual_memory().percent
                         
                         if memory_usage > 80:  # 降低阈值
-                            print(f"⚠️ 内存使用过高 ({memory_usage}%)，停止同步")
+                            print("refresh:operation_status")
                             flash(f"内存使用过高，已同步 {updated_count}/{i-1} 个运单", "warning")
                             break
                     except ImportError:
                         # 如果没有安装psutil，跳过内存检查
                         pass
                     
-                    tracks, error = fetch_tracking_from_api(agent, shipment.tracking_number)
+                    tracks, error = _refresh_query(shipment, agent, history=True)
                     if tracks and not error:
                         # 使用完整同步函数
                         success_count = complete_sync_tracking(shipment, tracks)
                         if success_count > 0:
                             updated_count += 1
-                            print("物流操作状态已记录（不包含业务数据）")
+                            print("refresh:operation_status")
                 
                 # 增加延迟，减少服务器压力
                 time.sleep(4)
@@ -1527,12 +1495,12 @@ def auto_sync_recent():
                 gc.collect()
                 
             except Exception as e:
-                print("物流操作完成或失败；详细数据不写入日志")
+                print("refresh:operation_status")
                 # 继续处理下一个运单，不中断整个流程
         
         flash(f"最近运单同步完成！更新 {updated_count}/{total_count} 个运单", "success")
         
     except Exception as e:
-        flash(f"最近运单同步失败: {str(e)}", "danger")
+        flash("refresh:operation_failed", "danger")
     
     return redirect(url_for("views.shipments"))
