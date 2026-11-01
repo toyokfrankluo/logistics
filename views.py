@@ -14,10 +14,15 @@ views = Blueprint("views", __name__)
 # -------------------------------
 # API 轨迹获取函数
 # -------------------------------
-def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
+def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str, *, selected_shipment=None):
     """
     根据不同的代理调用不同 API
     """
+    if selected_shipment is not None and (
+        selected_shipment.tracking_number != tracking_number
+        or not agent or selected_shipment.agent_id != agent.id
+    ):
+        return None, "运单身份与代理不一致"
     if not agent or not agent.api_url or not agent.supports_api:
         return None, "代理不支持 API 抓取"
 
@@ -65,7 +70,8 @@ def fetch_tracking_from_api(agent: CarrierAgent, tracking_number: str):
         # ========================
         elif "nextsls.com" in (agent.api_url or ""):
             # 根据 tracking_number 获取对应的 shipment
-            shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
+            shipment = (selected_shipment if selected_shipment is not None else
+                        Shipment.query.filter_by(tracking_number=tracking_number).first())
             
             # 修复：处理shipment_id缺失的情况
             if not shipment:
@@ -683,19 +689,28 @@ def track():
         if agent_id:
             query = query.filter_by(agent_id=agent_id)
 
+        # Keep primary-key identity throughout; never re-resolve a selected row by number.
+        selections = []
         if not numbers or numbers == [""]:
-            shipments = query.all()
-            numbers = [s.tracking_number for s in shipments]
+            selections = [(row.tracking_number, row, None) for row in query.all()]
+        else:
+            for no in dict.fromkeys(n.strip() for n in numbers if n.strip()):
+                matches = query.filter_by(tracking_number=no).all()
+                if not matches:
+                    selections.append((no, None, "当前查询范围内未找到运单"))
+                elif len(matches) > 1:
+                    selections.append((no, None, "当前查询范围内运单号不唯一，请缩小筛选范围"))
+                else:
+                    selections.append((no, matches[0], None))
 
-        if not numbers:
+        if not selections:
             message = "未找到运单号"
         else:
-            for no in numbers:
-                no = no.strip()
-                if not no:
+            for index, (no, s, selection_error) in enumerate(selections):
+                if selection_error:
+                    results[f"input:{index}"] = {"tracking_number": no, "tracks": "暂无轨迹", "error": selection_error}
                     continue
 
-                s = Shipment.query.filter_by(tracking_number=no).first()
                 all_tracks = []
                 err = None
 
@@ -708,7 +723,7 @@ def track():
 
                 # 2. API 轨迹（显示不带 [API] 标签）
                 if s and s.agent:
-                    api_tracks, api_err = fetch_tracking_from_api(s.agent, no)
+                    api_tracks, api_err = fetch_tracking_from_api(s.agent, no, selected_shipment=s)
                     if api_tracks:
                         if isinstance(api_tracks, list):
                             for ev in api_tracks:
@@ -725,7 +740,7 @@ def track():
                 if not all_tracks:
                     all_tracks.append("暂无轨迹")
 
-                results[no] = {"tracks": "\n".join(all_tracks), "error": err}
+                results[s.id] = {"tracking_number": no, "tracks": "\n".join(all_tracks), "error": err}
 
             message = f"共查询到 {len(results)} 条结果"
 

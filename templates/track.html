@@ -57,7 +57,7 @@
       <div class="accordion-item">
         <h2 class="accordion-header" id="h{{ loop.index }}">
           <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ loop.index }}">
-            {{ no }} {% if r.error %} — ❌ {{ r.error }}{% endif %}
+            {{ r.get('tracking_number', no) }} {% if r.error %} — ❌ {{ r.error }}{% endif %}
           </button>
         </h2>
         <div id="c{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#acc">
