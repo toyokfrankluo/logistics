@@ -16,6 +16,8 @@ class ShadowTests(unittest.TestCase):
         self.shipment.tracking_number = 'DEMO-001'
         self.agent.supports_api = True
         db.session.commit()
+        from isolated_runtime import register_shadow_fixture
+        register_shadow_fixture(self.app, self.shipment)
         self.login()
     def query(self, **data): return self.post('/track', data={'numbers':'DEMO-001', **data})
     def test_shadow_one_response(self):

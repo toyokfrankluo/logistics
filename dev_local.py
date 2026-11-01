@@ -21,6 +21,8 @@ def seed():
         db.session.flush()
         db.session.add(ManualTrack(shipment_id=shipment.id, description="虚构包裹已入库"))
         db.session.commit()
+        from isolated_runtime import register_shadow_fixture
+        register_shadow_fixture(app, shipment)
 
 
 if __name__ == "__main__":
