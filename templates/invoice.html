@@ -2,6 +2,7 @@
 {% block content %}
 <h2>生成账单 Excel</h2>
 <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   客户名称：<input type="text" name="customer"><br><br>
   收款银行信息：<br>
   <textarea name="bankinfo"></textarea><br><br>

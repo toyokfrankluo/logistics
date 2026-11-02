@@ -3,6 +3,7 @@
 <div class="container mt-4">
     <h2>编辑运单</h2>
     <form method="POST">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="mb-3">
             <label class="form-label">运单号</label>
             <input type="text" name="tracking_number" class="form-control" value="{{ shipment.tracking_number }}" required>

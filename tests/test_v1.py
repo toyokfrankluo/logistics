@@ -5,6 +5,8 @@ os.environ["DATABASE_URL"] = "sqlite:////DO-NOT-OPEN-business-database.db"
 
 import contextlib
 import io
+import re
+from html import unescape
 import socket
 import tempfile
 import unittest
@@ -63,8 +65,21 @@ class StabilityTests(unittest.TestCase):
         db.drop_all()
         self.context.pop()
 
+    def token(self, client=None):
+        client = client or self.client
+        # Isolate Flask-WTF's request-local token cache when tests keep an outer
+        # app context open for fixture database operations.
+        with self.app.app_context():
+            html = client.get("/login").get_data(as_text=True)
+        return unescape(re.search(r'name="csrf_token" value="([^"]+)"', html).group(1))
+
+    def post(self, path, **kwargs):
+        headers = dict(kwargs.pop("headers", {}))
+        headers.setdefault("X-CSRFToken", self.token())
+        return self.client.post(path, headers=headers, **kwargs)
+
     def login(self, admin=True):
-        return self.client.post("/login", data={
+        return self.post("/login", data={
             "username": "fictional-admin" if admin else "fictional-member",
             "password": "fictional-password",
         })
@@ -108,19 +123,19 @@ class StabilityTests(unittest.TestCase):
                 self.assertEqual(self.client.get(path).status_code, 200)
 
     def test_unknown_public_tracking_is_error(self):
-        response = self.client.post("/public_track", json={"order_id": "FICTIONAL-UNKNOWN"})
+        response = self.post("/public_track", json={"order_id": "FICTIONAL-UNKNOWN"})
         self.assertTrue(response.json["error"])
         self.assertEqual(response.json["tracks"], [])
         self.assertNotIn("2025-09-10", response.get_data(as_text=True))
 
     def test_public_manual_tracking(self):
         self.manual()
-        response = self.client.post("/public_track", json={"order_id": self.shipment.tracking_number})
+        response = self.post("/public_track", json={"order_id": self.shipment.tracking_number})
         self.assertIsNone(response.json["error"])
         self.assertIn("物流事件已记录，详细内容暂不公开", response.json["tracks"])
 
     def test_public_web_error_displayed(self):
-        response = self.client.post("/public/track", data={"numbers": "FICTIONAL-UNKNOWN"})
+        response = self.post("/public/track", data={"numbers": "FICTIONAL-UNKNOWN"})
         self.assertIn("无法查询该运单", response.get_data(as_text=True))
 
     def test_public_api_manual_tracking(self):
@@ -141,7 +156,7 @@ class StabilityTests(unittest.TestCase):
             post.return_value.json.return_value = {"success": "1", "data": [{"details": [
                 {"track_occur_date": "2026-01-02", "track_description": "虚构接口事件"}
             ]}]}
-            result = self.client.post("/public_track", json={"order_id": self.shipment.tracking_number})
+            result = self.post("/public_track", json={"order_id": self.shipment.tracking_number})
         self.assertIn("物流事件已记录，详细内容暂不公开", result.json["tracks"])
         self.assertEqual(post.call_count, 1)
         self.assertNotIn("fictional-private", output.getvalue())
@@ -179,7 +194,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_partial_edit_preserves_fields(self):
         self.login()
-        response = self.client.post(f"/shipments/edit/{self.shipment.id}", data={"note": "新备注"})
+        response = self.post(f"/shipments/edit/{self.shipment.id}", data={"note": "新备注"})
         self.assertEqual(response.status_code, 302)
         db.session.refresh(self.shipment)
         self.assertEqual(self.shipment.origin, "虚构起点")
@@ -191,20 +206,20 @@ class StabilityTests(unittest.TestCase):
 
     def test_edit_recalculates_fee(self):
         self.login()
-        self.client.post(f"/shipments/edit/{self.shipment.id}", data={"weight": "3"})
+        self.post(f"/shipments/edit/{self.shipment.id}", data={"weight": "3"})
         db.session.refresh(self.shipment)
         self.assertEqual(self.shipment.fee, 42)
 
     def test_invalid_edit_no_partial_write(self):
         self.login()
-        self.client.post(f"/shipments/edit/{self.shipment.id}", data={"origin": "不能保存", "weight": "nan"})
+        self.post(f"/shipments/edit/{self.shipment.id}", data={"origin": "不能保存", "weight": "nan"})
         db.session.refresh(self.shipment)
         self.assertEqual(self.shipment.origin, "虚构起点")
         self.assertEqual(self.shipment.weight, 2)
 
     def test_legacy_edit_provider_alias(self):
         self.login()
-        response = self.client.post(f"/shipments/{self.shipment.id}/edit",
+        response = self.post(f"/shipments/{self.shipment.id}/edit",
                                     data={"agent_tracking_number": "NEW-FICTIONAL"})
         self.assertEqual(response.status_code, 302)
         db.session.refresh(self.shipment)
@@ -213,7 +228,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_legacy_manual_fee_preserved(self):
         self.login()
-        self.client.post(f"/shipments/{self.shipment.id}/edit", data={"weight": "3", "fee": "99.50"})
+        self.post(f"/shipments/{self.shipment.id}/edit", data={"weight": "3", "fee": "99.50"})
         db.session.refresh(self.shipment)
         self.assertEqual(self.shipment.fee, 99.5)
 
@@ -228,7 +243,7 @@ class StabilityTests(unittest.TestCase):
         db.session.add(Shipment(tracking_number="FICTIONAL-PREV-DAY", fee=100,
                                 created_at=datetime(2026, 1, 1, 23, 59, 59)))
         db.session.commit()
-        response = self.client.post("/finance", data={"date_from": "2026-01-02", "date_to": "2026-01-02"})
+        response = self.post("/finance", data={"date_from": "2026-01-02", "date_to": "2026-01-02"})
         text = response.get_data(as_text=True)
         self.assertIn("FICTIONAL-001", text)
         self.assertNotIn("FICTIONAL-NEXT-DAY", text)
@@ -237,11 +252,11 @@ class StabilityTests(unittest.TestCase):
     def test_invalid_finance_dates(self):
         self.login()
         for dates in ({"date_to": "bad"}, {"date_from": "2026-02-01", "date_to": "2026-01-01"}):
-            self.assertEqual(self.client.post("/finance", data=dates).status_code, 400)
+            self.assertEqual(self.post("/finance", data=dates).status_code, 400)
 
     def test_finance_download(self):
         self.login()
-        response = self.client.post("/finance", data={"export": "1"})
+        response = self.post("/finance", data={"export": "1"})
         self.assertEqual(response.status_code, 200)
         wb = load_workbook(io.BytesIO(response.data))
         self.assertEqual(wb.active.cell(5, 4).value, "PROVIDER-FICTIONAL-001")
@@ -275,7 +290,7 @@ class StabilityTests(unittest.TestCase):
         self.login()
         db.session.add(Shipment(tracking_number="FICTIONAL-SECOND"))
         db.session.commit()
-        self.client.post(f"/shipments/edit/{self.shipment.id}", data={"tracking_number": "FICTIONAL-SECOND"})
+        self.post(f"/shipments/edit/{self.shipment.id}", data={"tracking_number": "FICTIONAL-SECOND"})
         db.session.refresh(self.shipment)
         self.assertEqual(self.shipment.tracking_number, "FICTIONAL-001")
 
@@ -294,7 +309,7 @@ class StabilityTests(unittest.TestCase):
                  "/shipments/1/tracks": "manual_tracks", "/track": "track", "/logout": "logout"}
         for path, endpoint in rules.items():
             with self.subTest(path=path):
-                method = "POST" if endpoint == "delete_agent" else "GET"
+                method = "POST" if endpoint in {"delete_agent", "logout"} else "GET"
                 self.assertEqual(adapter.match(path, method=method)[0], "views." + endpoint)
 
     def test_agent_secrets_not_rendered(self):
@@ -310,7 +325,7 @@ class StabilityTests(unittest.TestCase):
         self.agent.app_token = "fictional-token"
         db.session.commit()
         self.login()
-        self.client.post(f"/agents/{self.agent.id}/edit", data={"app_token": ""})
+        self.post(f"/agents/{self.agent.id}/edit", data={"app_token": ""})
         db.session.refresh(self.agent)
         self.assertEqual(self.agent.app_token, "fictional-token")
 

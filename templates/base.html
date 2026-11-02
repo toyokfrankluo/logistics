@@ -11,14 +11,14 @@
     <aside class="sidebar">
       <h2>菜单</h2>
       <ul>
-        <li><a href="{{ url_for('views.add_shipment') }}">录入运单</a></li>
+{% if current_user.is_admin %}        <li><a href="{{ url_for('views.add_shipment') }}">录入运单</a></li>{% endif %}
         <li><a href="{{ url_for('views.shipments') }}">运单管理</a></li>
         <li><a href="{{ url_for('views.customers') }}">客户管理</a></li>
-        <li><a href="{{ url_for('views.agents') }}">代理管理</a></li>
+{% if current_user.is_admin %}        <li><a href="{{ url_for('views.agents') }}">代理管理</a></li>{% endif %}
         <li><a href="{{ url_for('views.finance') }}">财务模块</a></li>
-        <li><a href="{{ url_for('views.bank_accounts') }}">收款账户管理</a></li>
+{% if current_user.is_admin %}        <li><a href="{{ url_for('views.bank_accounts') }}">收款账户管理</a></li>{% endif %}
         <li><a href="{{ url_for('views.track') }}">轨迹查询</a></li>
-        <li><a href="{{ url_for('views.logout') }}">登出</a></li>
+        <li><form method="post" action="{{ url_for('views.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">登出</button></form></li>
       </ul>
     </aside>
     <main class="main">

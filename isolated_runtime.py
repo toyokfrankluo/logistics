@@ -1,11 +1,14 @@
 """Explicit disposable local runtime. Never reads .env or a business database."""
 import secrets
 import socket
+import sqlite3
 import tempfile
 from weakref import WeakKeyDictionary
 from pathlib import Path
 
 import requests
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 _directory = None
 _runtimes = WeakKeyDictionary()
@@ -25,6 +28,12 @@ def configure(app):
     )
     _runtimes[app] = {"uri": app.config["SQLALCHEMY_DATABASE_URI"],
                       "directory": _directory, "fixtures": {}}
+    @event.listens_for(Engine, "connect")
+    def enforce_sqlite_foreign_keys(connection, record):
+        if isinstance(connection, sqlite3.Connection):
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
     # Block both HTTP and direct Python TCP connections before importing routes.
     requests.sessions.Session.request = deny_network
     requests.sessions.Session.send = deny_network

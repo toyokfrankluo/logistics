@@ -3,6 +3,7 @@
 <h2>轨迹查询</h2>
 
 <form method="post" class="mb-3">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-3">
     {% if not public_mode %}
     <div class="col-md-3">

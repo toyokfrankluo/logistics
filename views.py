@@ -1,6 +1,6 @@
 from flask import Blueprint, request, render_template, redirect, url_for, flash, send_file
 from models import db, CarrierAgent, Shipment, Customer, BankAccount, ManualTrack
-from flask_login import login_required, logout_user
+from flask_login import login_required, logout_user, current_user
 from models import db, CarrierAgent, Shipment, Customer, BankAccount, ManualTrack
 from datetime import datetime, timedelta
 from utils import export_invoice
@@ -310,11 +310,14 @@ def edit_agent(agent_id):
 @views.route("/agents/<int:agent_id>/delete", methods=["POST"])
 @login_required
 def delete_agent(agent_id):
+    from deletion import deactivate_agent
+    from sqlalchemy.exc import SQLAlchemyError
     a = CarrierAgent.query.get_or_404(agent_id)
-    Shipment.query.filter_by(agent_id=a.id).update({"agent_id": None})  # 解绑运单
-    a.is_active = False
-    db.session.commit()
-    flash("代理已删除（软删除）", "success")
+    try:
+        deactivate_agent(a)
+    except SQLAlchemyError:
+        return "停用失败，全部修改已回滚", 409
+    flash("代理已停用，历史运单关联保留", "success")
     return redirect(url_for("views.agents"))
 
 
@@ -497,10 +500,14 @@ def edit_shipment(shipment_id):
 @views.route("/shipments/delete/<int:shipment_id>", methods=["POST"])
 @login_required
 def delete_shipment(shipment_id):
+    from deletion import delete_records
+    from sqlalchemy.exc import SQLAlchemyError
     s = Shipment.query.get_or_404(shipment_id)
-    db.session.delete(s)
-    db.session.commit()
-    flash("运单已删除", "success")
+    try:
+        delete_records([s])
+    except SQLAlchemyError:
+        return "删除失败，全部修改已回滚", 409
+    flash("运单及手工轨迹已删除；客户、代理和收款账户保留", "success")
     return redirect(url_for("views.shipments"))
 
 
@@ -537,7 +544,7 @@ def manual_tracks(shipment_id):
             description=request.form.get("description"),
             location=request.form.get("location"),
             happen_time=datetime.utcnow(),
-            author="admin"
+            author=current_user.username
         )
         db.session.add(track)
         db.session.commit()
@@ -860,7 +867,7 @@ def fetch_17track_tracking(tracking_number):
 # -------------------------------
 # 登出
 # -------------------------------
-@views.route("/logout")
+@views.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
@@ -870,7 +877,7 @@ def logout():
 # -------------------------------
 # 手动同步路由
 # -------------------------------
-@views.route("/admin/sync-to-supabase")
+@views.route("/admin/sync-to-supabase", methods=["POST"])
 @login_required
 def sync_to_supabase():
     """手动同步所有运单基本信息到Supabase"""
@@ -941,7 +948,7 @@ def sync_to_supabase():
 
 
 # =============== 修改：轨迹同步路由 ===============
-@views.route("/admin/sync-tracking-details")
+@views.route("/admin/sync-tracking-details", methods=["POST"])
 @login_required
 def sync_tracking_details():
     """手动同步所有运单的轨迹信息（已优化去重）"""
@@ -999,7 +1006,7 @@ def sync_tracking_details():
 # -------------------------------
 # 一键刷新物流轨迹
 # -------------------------------
-@views.route("/admin/refresh-tracking")
+@views.route("/admin/refresh-tracking", methods=["POST"])
 @login_required
 def refresh_tracking():
     """严格内存防护的刷新函数"""
@@ -1065,7 +1072,7 @@ def refresh_tracking():
     return redirect(url_for("views.shipments"))
 
 
-@views.route("/shipments/<int:shipment_id>/refresh")
+@views.route("/shipments/<int:shipment_id>/refresh", methods=["POST"])
 @login_required
 def refresh_single_tracking(shipment_id):
     """刷新单个运单的物流轨迹"""
@@ -1199,7 +1206,7 @@ def complete_sync_tracking(shipment, tracks):
     return 0
 
 
-@views.route("/admin/refresh-full-history/<int:shipment_id>")
+@views.route("/admin/refresh-full-history/<int:shipment_id>", methods=["POST"])
 @login_required
 def refresh_full_history(shipment_id):
     """强制刷新完整历史轨迹 - 解决历史数据缺失问题"""
@@ -1248,7 +1255,7 @@ def refresh_full_history(shipment_id):
     return redirect(url_for("views.shipments"))
 
 
-@views.route("/admin/auto-sync-single/<int:shipment_id>")
+@views.route("/admin/auto-sync-single/<int:shipment_id>", methods=["POST"])
 @login_required
 def auto_sync_single(shipment_id):
     """同步单个运单 - 使用完整同步"""
@@ -1291,7 +1298,7 @@ def auto_sync_single(shipment_id):
     return redirect(url_for("views.shipments"))
 
 
-@views.route("/admin/auto-sync-all-safe")
+@views.route("/admin/auto-sync-all-safe", methods=["POST"])
 @login_required
 def auto_sync_all_safe():
     """安全版本的全量同步 - 极低内存占用"""
@@ -1364,7 +1371,7 @@ def auto_sync_all_safe():
     return redirect(url_for("views.shipments"))
 
 
-@views.route("/admin/auto-sync-all")
+@views.route("/admin/auto-sync-all", methods=["POST"])
 @login_required
 def auto_sync_all():
     """自动同步所有运单 - 优化内存版本"""
@@ -1443,7 +1450,7 @@ def auto_sync_all():
     return redirect(url_for("views.shipments"))
 
 
-@views.route("/admin/auto-sync-recent")
+@views.route("/admin/auto-sync-recent", methods=["POST"])
 @login_required
 def auto_sync_recent():
     """手动触发最近运单同步 - 优化内存版本"""

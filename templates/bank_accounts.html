@@ -5,6 +5,7 @@
 
     <!-- 新增银行账户表单 -->
     <form method="POST" class="row g-3 mb-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-md-2">
             <label class="form-label">类型</label>
             <select name="account_type" class="form-select">

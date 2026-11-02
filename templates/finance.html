@@ -3,6 +3,7 @@
 <h1>财务模块</h1>
 
 <form method="post" action="{{ url_for('views.finance') }}" class="row g-3 mb-3">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="col-md-3">
     <label>选择客户</label>
     <select name="customer_id" class="form-select">

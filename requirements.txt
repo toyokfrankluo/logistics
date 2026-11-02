@@ -32,5 +32,6 @@ typing_extensions==4.15.0
 tzdata==2025.2
 urllib3==2.5.0
 Werkzeug==3.0.3
-WTForms==3.2.1
-psycopg2-binary
+WTForms==3.1.2
+psycopg2-binary==2.9.13
+Flask-WTF==1.2.2

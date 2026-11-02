@@ -2,6 +2,7 @@
 {% block content %}
 <h2>{% if shipment %}编辑运单{% else %}录入运单{% endif %}</h2>
 <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-3 mb-3">
     <div class="col-md-4">
       <label>运单号</label>

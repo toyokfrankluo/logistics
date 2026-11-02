@@ -10,6 +10,7 @@
 {% for c in carriers %}
   <li>{{ c[0] }} - {{ c[1] }} ({{ c[2] }})
     <form style="display:inline" method="post" action="{{ url_for('admin_delete_carrier', carrier_id=c[0]) }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit">删除</button>
     </form>
   </li>

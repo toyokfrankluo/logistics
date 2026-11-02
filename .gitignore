@@ -34,3 +34,11 @@ build/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
+# Dedicated offline local acceptance environment
+.venv-local/
+
+# Private data excluded from delivery
+.env.*
+*.sqlite
+data.json
+logistics-starter

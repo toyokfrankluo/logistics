@@ -2,6 +2,7 @@
 <title>Admin Login</title>
 <h2>管理员登录</h2>
 <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   密码: <input type="password" name="password">
   <button type="submit">登录</button>
 </form>

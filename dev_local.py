@@ -12,12 +12,14 @@ def seed():
         db.create_all()
         user = User(username="local-admin", is_admin=True)
         user.set_password("local-test-only")
+        reader = User(username="local-reader", is_admin=False)
+        reader.set_password("local-read-only")
         customer = Customer(name="虚构客户")
         agent = CarrierAgent(name="虚构手工代理", supports_api=False)
         shipment = Shipment(tracking_number="DEMO-001", shipment_id="DEMO-PROVIDER-001",
                             customer=customer, agent=agent, origin="虚构仓库",
                             destination="测试目的地", weight=2, unit_price=10, fee=20)
-        db.session.add_all([user, shipment])
+        db.session.add_all([user, reader, shipment])
         db.session.flush()
         db.session.add(ManualTrack(shipment_id=shipment.id, description="虚构包裹已入库"))
         db.session.commit()
@@ -27,4 +29,4 @@ def seed():
 
 if __name__ == "__main__":
     seed()
-    app.run(host="127.0.0.1", port=5055, debug=False, use_reloader=False)
+    app.run(host="127.0.0.1", port=int(os.environ.get("LOGISTICS_LOCAL_PORT", "5055")), debug=False, use_reloader=False)

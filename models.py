@@ -99,7 +99,10 @@ class ManualTrack(db.Model, TimestampMixin):
     description = db.Column(db.Text, nullable=False)
     author = db.Column(db.String(100))  # 记录是谁写的（可选）
 
-    shipment = db.relationship("Shipment", backref="manual_tracks")
+    # ORM cascade only: no database schema migration is needed.
+    shipment = db.relationship(
+        "Shipment", backref=db.backref("manual_tracks", cascade="all, delete-orphan")
+    )
 
 # -------------------------
 # 收款账户（财务）

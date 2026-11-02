@@ -2,6 +2,7 @@
 <title>添加货代</title>
 <h2>添加/编辑货代</h2>
 <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   名称: <input name="name"><br>
   类型: <select name="type"><option value="api">API</option><option value="web">网页抓取</option></select><br>
   登录网址 (web): <input name="login_url"><br>

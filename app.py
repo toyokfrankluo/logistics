@@ -77,9 +77,11 @@ migrate = Migrate(app, db)
 # 登录
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
+from write_security import csrf, init_write_security
+init_write_security(app, login_manager)
 
 # 管理后台
-from access_control import SecureAdminIndexView, SecureModelView
+from access_control import SecureAdminIndexView, SecureModelView, OwnedRecordView
 admin = Admin(app, name="后台管理", template_mode="bootstrap4",
               index_view=SecureAdminIndexView())
 
@@ -140,8 +142,8 @@ class User(UserMixin, db.Model):
 admin.add_view(SecureModelView(User, db.session))
 admin.add_view(SecureModelView(Customer, db.session))
 admin.add_view(SecureModelView(CarrierAgent, db.session))
-admin.add_view(SecureModelView(Shipment, db.session))
-admin.add_view(SecureModelView(ManualTrack, db.session))
+admin.add_view(OwnedRecordView(Shipment, db.session))
+admin.add_view(OwnedRecordView(ManualTrack, db.session))
 admin.add_view(SecureModelView(BankAccount, db.session))
 
 # ------------------------------
@@ -413,6 +415,10 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
     if not tracking_number:
         return {"error": "必须提供 tracking_number"}
 
+    shipment = Shipment.query.filter_by(tracking_number=tracking_number).first()
+    if not shipment:
+        return {"error": f"未找到运单号: {tracking_number}"}
+
     cache_key = (f"agent:{agent_id}" if agent_id else f"carrier:{carrier_id}", tracking_number)
     now = time.time()
     if cache_key in CACHE:
@@ -479,7 +485,7 @@ def call_gettrack(carrier_id=None, tracking_number=None, agent_id=None, timeout=
             }
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {agent.app_token or ""}"
+                "Authorization": f"Bearer {agent.app_token or ''}"
             }
             try:
                 r = requests.post(agent.api_url, json=payload, headers=headers, timeout=timeout)
@@ -722,13 +728,14 @@ def login():
         <!doctype html><meta charset="utf-8"><title>登录</title>
         <h2>登录</h2>
         <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             用户名: <input name="username"><br><br>
             密码: <input name="password" type="password"><br><br>
             <button type="submit">登录</button>
         </form>
         """)
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
@@ -796,6 +803,7 @@ def edit_agent(agent_id):
     return render_template_string("""
     <h3>编辑代理</h3>
     <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       名称 <input name="name" value="{{a.name}}"><br>
       API  <input name="api_url" value="{{a.api_url or ''}}"><br>
       账号 <input name="username" value="{{a.username or ''}}"><br>
@@ -812,12 +820,14 @@ def edit_agent(agent_id):
 @app.route("/agents/<int:agent_id>/delete", methods=["POST"])
 @login_required
 def delete_agent(agent_id):
+    from deletion import deactivate_agent
+    from sqlalchemy.exc import SQLAlchemyError
     a = CarrierAgent.query.get_or_404(agent_id)
-    # 软删除：解除运单关联，避免外键错误
-    Shipment.query.filter_by(agent_id=a.id).update({"agent_id": None})
-    a.is_active = False
-    db.session.commit()
-    flash("已停用该代理（软删除），并解绑相关运单。")
+    try:
+        deactivate_agent(a)
+    except SQLAlchemyError:
+        return "停用失败，全部修改已回滚", 409
+    flash("代理已停用，历史运单关联保留", "success")
     return redirect(url_for("agents"))
 
 # ------------------------------
@@ -971,6 +981,7 @@ def edit_shipment(sid):
     return render_template_string("""
     <h3>编辑运单 {{s.tracking_number}}</h3>
     <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       代理系统单号 <input name="shipment_id" value="{{s.shipment_id or ''}}"><br>
       17Track单号 <input name="third_party_tracking_number" value="{{s.third_party_tracking_number or ''}}"><br>
       目的地 <input name="destination" value="{{s.destination or ''}}"><br>
@@ -991,12 +1002,14 @@ def edit_shipment(sid):
 @app.route("/shipments/<int:sid>/delete", methods=["POST"])
 @login_required
 def delete_shipment(sid):
+    from deletion import delete_records
+    from sqlalchemy.exc import SQLAlchemyError
     s = Shipment.query.get_or_404(sid)
-    # 允许删除（无外键约束影响其他表）
-    ManualTrack.query.filter_by(shipment_id=s.id).delete()
-    db.session.delete(s)
-    db.session.commit()
-    flash("运单已删除")
+    try:
+        delete_records([s])
+    except SQLAlchemyError:
+        return "删除失败，全部修改已回滚", 409
+    flash("运单及手工轨迹已删除；客户、代理和收款账户保留", "success")
     return redirect(url_for("shipments"))
 
 # ------------------------------
@@ -1128,6 +1141,7 @@ def bank_accounts():
     return render_template_string("""
     <h3>收款账户</h3>
     <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       类型 <select name="account_type"><option value="private">私人</option><option value="public">公账</option></select><br>
       开户行 <input name="bank_name"><br>
       户名 <input name="account_name"><br>
@@ -1179,6 +1193,7 @@ def manual_tracks(sid):
     return render_template_string("""
     <h3>手工轨迹 - {{s.tracking_number}}</h3>
     <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       时间(YYYY-MM-DD HH:MM:SS) <input name="happen_time"><br>
       地点 <input name="location"><br>
       描述 <textarea name="description" rows="4" cols="60"></textarea><br><br>
@@ -1281,6 +1296,7 @@ def frontend_page():
 # 新增 JSON API（前端 fetch 调用用这个）
 # ------------------------------
 @app.route("/public_track", methods=["POST"])
+@csrf.exempt
 def public_track_json():
     return public_tracking.json_lookup()
 

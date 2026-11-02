@@ -3,7 +3,8 @@
 <div class="container mt-4">
     <h2>轨迹管理 - {{ shipment.tracking_number }}</h2>
 
-    <form method="POST" class="mb-4">
+    {% if current_user.is_admin %}<form method="POST" class="mb-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="row g-3">
             <div class="col-md-3">
                 <label class="form-label">位置</label>
@@ -17,7 +18,7 @@
                 <button type="submit" class="btn btn-primary w-100">添加</button>
             </div>
         </div>
-    </form>
+    </form>{% endif %}
 
     <table class="table table-striped">
         <thead>

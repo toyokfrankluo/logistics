@@ -5,6 +5,7 @@
 
     <!-- 添加代理表单 -->
     <form method="POST" action="{{ url_for('views.agents') }}" class="mb-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group mb-2">
             <label for="name">代理名称</label>
             <input type="text" class="form-control" id="name" name="name" required>
@@ -59,6 +60,7 @@
                 <td>
                     <a href="{{ url_for('views.edit_agent', agent_id=agent.id) }}" class="btn btn-sm btn-warning">编辑</a>
                     <form method="POST" action="{{ url_for('views.delete_agent', agent_id=agent.id) }}" style="display:inline;">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('确定要删除这个代理吗？');">删除</button>
                     </form>
                 </td>

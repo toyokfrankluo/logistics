@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>客户管理</h2>
-<form method="post" class="mb-3">
+{% if current_user.is_admin %}<form method="post" class="mb-3">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-3">
     <div class="col-md-6">
       <label>客户名称</label>
@@ -15,7 +16,7 @@
   <div class="mt-3">
     <button class="btn btn-primary">保存客户</button>
   </div>
-</form>
+</form>{% endif %}
 
 <hr>
 <h3>客户列表</h3>

@@ -1,0 +1,4 @@
+# Optional legacy scheduler/diagnostics; never executed by offline tests.
+-r requirements.txt
+schedule==1.2.2
+psutil==6.1.1
