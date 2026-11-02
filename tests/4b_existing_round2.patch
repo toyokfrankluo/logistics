@@ -1,0 +1,7 @@
+--- a/tests/test_round2.py
++++ b/tests/test_round2.py
+@@ -270,3 +270,3 @@
+         self.assertEqual(public.status_code, 200)
+-        self.assertIn("Access-Control-Allow-Origin", public.headers)
++        self.assertNotIn("Access-Control-Allow-Origin", public.headers)
+         self.assertNotIn("Access-Control-Allow-Credentials", public.headers)

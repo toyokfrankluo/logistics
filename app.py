@@ -57,7 +57,10 @@ if ISOLATED_MODE:
     from isolated_runtime import configure
     configure(app)
 
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+# Public queries are same-origin only. CORS is not authorization.
+from public_tracking import init_app as init_public_tracking
+import public_tracking
+init_public_tracking(app)
 
 from views import views
 app.register_blueprint(views)
@@ -1247,79 +1250,25 @@ def track():
 # ------------------------------
 @app.route("/public/track", methods=["GET", "POST"])
 def public_track_page():
-    results = {}
-    default_text = ""
-    message = ""
-    if request.method == "POST":
-        default_text = request.form.get("numbers", "").strip()
-        if not default_text:
-            message = "请输入运单号"
-        else:
-            lines = [ln.strip() for ln in default_text.splitlines() if ln.strip()]
-            if len(lines) > 30:
-                message = f"输入 {len(lines)} 条，本次只处理前 30 条。"
-                lines = lines[:30]
-            for n in lines:
-                s = Shipment.query.filter_by(tracking_number=n).first()
-                data = None
-                
-                # 优先尝试17Track查询（如果有17Track单号）
-                if s and s.third_party_tracking_number:
-                    data = call_17track(s.third_party_tracking_number)
-                
-                # 如果没有17Track结果，尝试常规查询
-                if not data or (isinstance(data, dict) and data.get("error")):
-                    if s and s.agent_id:
-                        data = call_gettrack(None, n, agent_id=s.agent_id)
-                    elif s and s.carrier_id:
-                        data = call_gettrack(s.carrier_id, n, agent_id=None)
-                    else:
-                        data = call_gettrack(None, n, agent_id=None)
-                
-                if isinstance(data, dict) and data.get("error"):
-                    results[n] = {"error": data.get("error"), "tracks": None, "raw": data}
-                else:
-                    results[n] = {"error": None, "tracks": format_tracks_from_data(data), "raw": data}
-
-    return render_template_string("""
-    <h2>物流轨迹查询</h2>
-    <form method="post">
-      <textarea name="numbers" rows="6" style="width:600px" placeholder="每行一个单号（最多30条）">{{default_text}}</textarea><br><br>
-      <button>查询</button>
-    </form>
-    {% if message %}<p>{{message}}</p>{% endif %}
-    {% if results %}
-      <hr><h3>结果</h3>
-      <div style="white-space:pre-wrap">
-        {% for no, r in results.items() %}
-          <h4>{{no}}</h4>
-          {% if r.error %}{{r.error}}{% elif r.tracks %}{{r.tracks}}{% else %}无轨迹{% endif %}
-          <hr>
-        {% endfor %}
-      </div>
-    {% endif %}
-    """, results=results, message=message, default_text=default_text)
+    return public_tracking.page()
 
 # ------------------------------
 # API
 # ------------------------------
 @app.route("/api/track/<carrier_id>/<tracking_number>")
 def api_track_one(carrier_id, tracking_number):
-    data = call_gettrack(carrier_id, tracking_number)
-    return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+    return public_tracking.api_lookup(tracking_number, carrier_id=carrier_id)
 
 @app.route("/api/track_by_agent/<int:agent_id>/<tracking_number>")
 def api_track_by_agent(agent_id, tracking_number):
-    data = call_gettrack(None, tracking_number, agent_id=agent_id)
-    return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+    return public_tracking.api_lookup(tracking_number, agent_id=agent_id)
 
 # ------------------------------
 # 17Track API 路由
 # ------------------------------
 @app.route("/api/17track/<tracking_number>")
 def api_17track(tracking_number):
-    data = call_17track(tracking_number)
-    return app.response_class(json.dumps(data, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+    return public_tracking.api_lookup(tracking_number, third=True)
 
 # ------------------------------
 # 新增路由，渲染前端页面
@@ -1333,36 +1282,7 @@ def frontend_page():
 # ------------------------------
 @app.route("/public_track", methods=["POST"])
 def public_track_json():
-    try:
-        data = request.get_json() or {}
-        order_id = data.get("order_id", "").strip()
-
-        if not order_id:
-            return jsonify({"error": "缺少 order_id 参数"}), 400
-
-        s = Shipment.query.filter_by(tracking_number=order_id).first()
-        result_data = None
-        
-        # 优先尝试17Track查询（如果有17Track单号）
-        if s and s.third_party_tracking_number:
-            result_data = call_17track(s.third_party_tracking_number)
-        
-        # 如果没有17Track结果，尝试常规查询
-        if not result_data or (isinstance(result_data, dict) and result_data.get("error")):
-            if s and s.agent_id:
-                result_data = call_gettrack(None, order_id, agent_id=s.agent_id)
-            elif s and s.carrier_id:
-                result_data = call_gettrack(s.carrier_id, order_id, agent_id=None)
-            else:
-                result_data = call_gettrack(None, order_id, agent_id=None)
-
-        if isinstance(result_data, dict) and result_data.get("error"):
-            return jsonify({"order_id": order_id, "error": result_data.get("error"), "tracks": []})
-        else:
-            return jsonify({"order_id": order_id, "error": None, "tracks": format_tracks_from_data(result_data)})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return public_tracking.json_lookup()
 
 # ------------------------------
 # 账单手工导出（保留）

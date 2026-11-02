@@ -11,6 +11,7 @@ import views
 from jinja2 import TemplateNotFound
 from requests import Timeout
 from models import db, ManualTrack
+from public_tracking import NOTICE, DENIED, UNAVAILABLE
 
 EVENT = {"track_occur_date": "2026-01-02 10:00:00", "track_location": "虚构港口", "track_description": "虚构接口事件"}
 SUCCESS = {"success": "1", "cnmessage": "虚构成功", "data": [{"details": [EVENT]}]}
@@ -60,17 +61,19 @@ class TrackingContracts(unittest.TestCase):
         self.http_post.return_value = response(SUCCESS)
         result = self.public()
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json, {"order_id": "FICTIONAL-001", "error": None,
-                                      "tracks": "虚构港口 — 虚构接口事件\n2026-01-02 10:00:00"})
+        self.assertEqual(result.json["tracks"], NOTICE + "\n2026-01-02 10:00:00")
+        self.assertIsNone(result.json["error"])
+        self.assertEqual(result.json["status"], "unknown")
 
     def test_json_missing_and_unknown_number_contract(self):
         self.assertEqual(self.client.post('/public_track', json={}).status_code, 400)
         result = self.client.post('/public_track', json={"order_id": "UNKNOWN"})
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json, {"order_id": "UNKNOWN", "error": "未找到运单号: UNKNOWN", "tracks": []})
+        self.assertEqual(result.json["error"], DENIED)
+        self.assertEqual(result.json["tracks"], [])
         self.http_post.assert_not_called()
 
-    def test_all_raw_api_routes_preserve_supplier_envelope(self):
+    def test_api_routes_use_safe_envelope(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response(SUCCESS)
         for path in ('/api/track/fictional/FICTIONAL-001', f'/api/track_by_agent/{self.agent.id}/FICTIONAL-001'):
@@ -78,14 +81,15 @@ class TrackingContracts(unittest.TestCase):
                 result = self.client.get(path)
                 self.assertEqual(result.status_code, 200)
                 self.assertEqual(result.mimetype, 'application/json')
-                self.assertEqual(result.json, SUCCESS)
+                self.assertEqual(result.json["data"][0]["details"][0], {"track_occur_date": "2026-01-02 10:00:00", "track_location": "", "track_description": NOTICE})
+                self.assertNotIn("cnmessage", result.json)
 
     def test_public_web_and_frontend_contract(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response(SUCCESS)
         result = self.post('/public/track', data={"numbers": "FICTIONAL-001"})
         self.assertEqual(result.status_code, 200)
-        self.assertIn('虚构接口事件', result.get_data(as_text=True))
+        self.assertIn(NOTICE, result.get_data(as_text=True))
         frontend = self.client.get('/frontend').get_data(as_text=True)
         self.assertIn('fetch("/public_track"', frontend)
         self.assertIn('textContent', frontend)
@@ -104,7 +108,7 @@ class TrackingContracts(unittest.TestCase):
     def test_empty_tracks_are_success_with_different_outputs(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response({"success": "1", "cnmessage": "虚构空轨迹", "data": [{"details": []}]})
-        self.assertEqual(self.public().json['tracks'], '虚构空轨迹')
+        self.assertEqual(self.public().json['tracks'], '暂无轨迹')
         self.login()
         text = self.post('/track', data={"numbers": "FICTIONAL-001"}).get_data(as_text=True)
         self.assertIn('暂无轨迹', text)
@@ -115,7 +119,7 @@ class TrackingContracts(unittest.TestCase):
         result = self.public()
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json['tracks'], [])
-        self.assertIn('fictional timeout', result.json['error'])
+        self.assertEqual(result.json['error'], UNAVAILABLE)
         self.login()
         text = self.post('/track', data={"numbers": "FICTIONAL-001"}).get_data(as_text=True)
         self.assertIn('虚构仓库已接收', text)
@@ -125,7 +129,7 @@ class TrackingContracts(unittest.TestCase):
     def test_http_error_differs_between_public_and_backend(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response(SUCCESS, status=503)
-        self.assertIsNone(self.public().json['error'])  # Public branch does not check HTTP status.
+        self.assertEqual(self.public().json['error'], UNAVAILABLE)  # 4B rejects HTTP failures.
         tracks, error = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertIsNone(tracks)
         self.assertEqual(error, 'API返回错误 503')
@@ -133,7 +137,7 @@ class TrackingContracts(unittest.TestCase):
     def test_invalid_json_public_displays_raw_backend_reports_error(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response(invalid=True)
-        self.assertEqual(self.public().json['tracks'], 'fictional raw response')
+        self.assertEqual(self.public().json['error'], UNAVAILABLE)
         tracks, error = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertIsNone(tracks)
         self.assertIn('fictional invalid JSON', error)
@@ -141,7 +145,7 @@ class TrackingContracts(unittest.TestCase):
     def test_string_zero_is_not_normalized_as_error(self):
         self.http_post.side_effect = None
         self.http_post.return_value = response({"success": "0", "cnmessage": "虚构拒绝", "data": []})
-        self.assertIsNone(self.public().json['error'])
+        self.assertEqual(self.public().json['error'], UNAVAILABLE)
         tracks, error = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertEqual((tracks, error), ([], None))
 
@@ -150,7 +154,7 @@ class TrackingContracts(unittest.TestCase):
         del payload['data'][0]['details'][0]['track_occur_date']
         self.http_post.side_effect = None
         self.http_post.return_value = response(payload)
-        self.assertEqual(self.public().json['tracks'], '虚构港口 — 虚构接口事件')
+        self.assertEqual(self.public().json['tracks'], NOTICE)
         tracks, error = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertIsNone(tracks[0]['time'])
         self.assertIsNone(error)
@@ -160,7 +164,7 @@ class TrackingContracts(unittest.TestCase):
         payload['data'][0]['details'].append(copy.deepcopy(EVENT))
         self.http_post.side_effect = None
         self.http_post.return_value = response(payload)
-        self.assertEqual(self.public().json['tracks'].count('虚构接口事件'), 2)
+        self.assertEqual(self.public().json['tracks'].count(NOTICE), 2)
         tracks, _ = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertEqual(len(tracks), 2)
 
@@ -170,8 +174,8 @@ class TrackingContracts(unittest.TestCase):
         self.http_post.side_effect = None
         self.http_post.return_value = response(NEXTSLS)
         result = self.client.get(f'/api/track_by_agent/{self.agent.id}/FICTIONAL-001')
-        self.assertEqual(result.json, NEXTSLS)
-        self.assertIn('"shipment"', self.public().json['tracks'])
+        self.assertNotIn("shipment", result.get_data(as_text=True))
+        self.assertIn(NOTICE, self.public().json["tracks"])
         tracks, error = views.fetch_tracking_from_api(self.agent, 'FICTIONAL-001')
         self.assertEqual(tracks, [{"time": "2026-01-02 10:00:00", "location": "虚构港口", "description": "虚构接口事件"}])
         self.assertIsNone(error)
@@ -180,7 +184,7 @@ class TrackingContracts(unittest.TestCase):
         self.agent.api_url = 'https://fictional.nextsls.com/api'
         self.shipment.shipment_id = None
         db.session.commit()
-        self.assertEqual(self.public().json['error'], '未配置代理系统单号')
+        self.assertEqual(self.public().json['error'], UNAVAILABLE)
         self.http_post.assert_not_called()
         self.http_post.side_effect = None
         self.http_post.return_value = response(NEXTSLS)
@@ -194,8 +198,9 @@ class TrackingContracts(unittest.TestCase):
         self.http_post.return_value = response({"status": 200, "data": [{"track": [{"time": "T", "location": "L", "description": "虚构第三方"}]}]})
         with patch.object(baseline.backend, 'TRACK17_API_KEY', 'fictional-only'):
             api = self.client.get('/api/17track/FICTIONAL-THIRD')
-            self.assertEqual(api.json, {"success": "1", "cnmessage": "17Track轨迹查询成功", "data": [{"details": [{"track_occur_date": "T", "track_location": "L", "track_description": "虚构第三方"}]}]})
-            self.assertEqual(self.public().json['tracks'], 'L — 虚构第三方\nT')
+            self.assertEqual(api.json['data'][0]['details'][0], {'track_occur_date': None, 'track_location': '', 'track_description': NOTICE})
+            self.assertEqual(self.public().json['tracks'], NOTICE)
+
 
     def test_17track_failure_modes(self):
         cases = [(response(status=503), '返回错误 503'), (response({"status": 500, "message": "fictional denied"}), 'fictional denied'), (response(invalid=True), 'fictional invalid JSON')]
@@ -205,17 +210,19 @@ class TrackingContracts(unittest.TestCase):
                 self.http_post.return_value = mock_response
                 result = self.client.get('/api/17track/FAKE')
                 self.assertEqual(result.status_code, 200)
-                self.assertIn(expected, result.json['error'])
+                self.assertEqual(result.json['error'], DENIED)
+                self.http_post.assert_not_called()
             self.http_post.side_effect = Timeout('fictional timeout')
-            self.assertIn('fictional timeout', self.client.get('/api/17track/FAKE').json['error'])
+            self.assertEqual(self.client.get('/api/17track/FAKE').json['error'], DENIED)
+            self.http_post.assert_not_called()
 
     def test_17track_failure_falls_back_to_agent(self):
         self.shipment.third_party_tracking_number = 'FICTIONAL-THIRD'
         db.session.commit()
         self.http_post.side_effect = [Timeout('fictional timeout'), response(SUCCESS)]
         with patch.object(baseline.backend, 'TRACK17_API_KEY', 'fictional-only'):
-            self.assertIn('虚构接口事件', self.public().json['tracks'])
-        self.assertEqual(self.http_post.call_count, 2)
+            self.assertEqual(self.public().json['error'], UNAVAILABLE)
+        self.assertEqual(self.http_post.call_count, 1)  # No unapproved provider fallback.
 
     def test_broken_17track_template_is_recorded(self):
         self.login()
@@ -266,5 +273,5 @@ class TrackingContracts(unittest.TestCase):
         self.assertTrue(self.public().json['error'])
         self.http_post.side_effect = None
         self.http_post.return_value = response(SUCCESS)
-        self.assertTrue(self.public().json['error'])
-        self.assertEqual(self.http_post.call_count, 1)
+        self.assertIsNone(self.public().json['error'])
+        self.assertEqual(self.http_post.call_count, 2)  # Failures never poison the cache.

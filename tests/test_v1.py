@@ -54,6 +54,8 @@ class StabilityTests(unittest.TestCase):
         db.session.add(self.shipment)
         db.session.commit()
         backend.CACHE.clear()
+        from public_fixtures import configure_public
+        configure_public(self.app)
         self.client = self.app.test_client()
 
     def tearDown(self):
@@ -115,16 +117,16 @@ class StabilityTests(unittest.TestCase):
         self.manual()
         response = self.client.post("/public_track", json={"order_id": self.shipment.tracking_number})
         self.assertIsNone(response.json["error"])
-        self.assertIn("虚构仓库已接收", response.json["tracks"])
+        self.assertIn("物流事件已记录，详细内容暂不公开", response.json["tracks"])
 
     def test_public_web_error_displayed(self):
         response = self.client.post("/public/track", data={"numbers": "FICTIONAL-UNKNOWN"})
-        self.assertIn("未找到运单号", response.get_data(as_text=True))
+        self.assertIn("无法查询该运单", response.get_data(as_text=True))
 
     def test_public_api_manual_tracking(self):
         self.manual()
         response = self.client.get(f"/api/track_by_agent/{self.agent.id}/{self.shipment.tracking_number}")
-        self.assertEqual(response.json["data"][0]["details"][0]["track_description"], "虚构仓库已接收")
+        self.assertEqual(response.json["data"][0]["details"][0]["track_description"], "物流事件已记录，详细内容暂不公开")
 
     def test_public_real_adapter_with_mock_only(self):
         self.agent.supports_api = True
@@ -135,11 +137,12 @@ class StabilityTests(unittest.TestCase):
         db.session.commit()
         output = io.StringIO()
         with patch("app.requests.post") as post, contextlib.redirect_stdout(output):
+            post.return_value.status_code = 200
             post.return_value.json.return_value = {"success": "1", "data": [{"details": [
                 {"track_occur_date": "2026-01-02", "track_description": "虚构接口事件"}
             ]}]}
             result = self.client.post("/public_track", json={"order_id": self.shipment.tracking_number})
-        self.assertIn("虚构接口事件", result.json["tracks"])
+        self.assertIn("物流事件已记录，详细内容暂不公开", result.json["tracks"])
         self.assertEqual(post.call_count, 1)
         self.assertNotIn("fictional-private", output.getvalue())
         self.assertNotIn("FICTIONAL-001", output.getvalue())
